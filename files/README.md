@@ -2,7 +2,7 @@
 
 Train a Spot-like quadruped robot to walk towards goals using deep reinforcement learning (PPO algorithm).
 
-## 🎯 Project Overview
+##  Project Overview
 
 This project trains a simulated quadruped robot to:
 - **Walk forward** without falling
@@ -22,7 +22,7 @@ This project trains a simulated quadruped robot to:
 └── README.md            # This file
 ```
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### 1. Installation
 
@@ -54,7 +54,7 @@ python test_spot.py spot_models/best_model.zip --no-render
 python test_spot.py spot_models/best_model.zip --interactive
 ```
 
-## 🤖 Robot Description
+##  Robot Description
 
 ### Physical Properties
 - **Type**: Quadruped (4 legs)
@@ -67,7 +67,7 @@ python test_spot.py spot_models/best_model.zip --interactive
 2. **Thigh joint**: Flexion/extension
 3. **Calf joint**: Flexion/extension
 
-## 🧠 Learning Setup
+##  Learning Setup
 
 ### Observation Space (37 dimensions)
 - Joint positions (12): Current angle of each joint
@@ -101,7 +101,7 @@ Episode ends when:
 - Goal is reached (distance < 0.5m)
 - Maximum steps reached (1000 steps)
 
-## 📊 Training Details
+##  Training Details
 
 ### Algorithm: PPO (Proximal Policy Optimization)
 
@@ -130,7 +130,7 @@ Monitor training with TensorBoard:
 tensorboard --logdir spot_logs/
 ```
 
-## 🎮 Usage Examples
+##  Usage Examples
 
 ### Train from scratch
 ```bash
@@ -174,16 +174,16 @@ Modify hyperparameters in `train_spot.py`:
 - Number of parallel environments
 - Rollout length
 
-## 📈 Expected Results
+##  Expected Results
 
 After successful training, the robot should:
-- ✅ Walk forward smoothly
-- ✅ Navigate to goals 5-8 meters away
-- ✅ Success rate > 80% on goal reaching
-- ✅ Average episode reward > 100
-- ✅ Maintain balance on flat terrain
+-  Walk forward smoothly
+-  Navigate to goals 5-8 meters away
+-  Success rate > 80% on goal reaching
+-  Average episode reward > 100
+-  Maintain balance on flat terrain
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### Robot immediately falls
 - Increase training time
@@ -200,7 +200,7 @@ After successful training, the robot should:
 - Increase goal reaching bonus in reward function
 - Decrease goal tolerance distance
 
-## 🔮 Next Steps: Sim-to-Real Transfer
+##  Next Steps: Sim-to-Real Transfer
 
 To deploy on a real robot:
 
@@ -223,14 +223,14 @@ To deploy on a real robot:
    - Use sim policy as initialization
    - Continue training with real data
 
-## 📚 Resources
+##  Resources
 
 - [Stable Baselines3 Documentation](https://stable-baselines3.readthedocs.io/)
 - [MuJoCo Documentation](https://mujoco.readthedocs.io/)
 - [PPO Paper](https://arxiv.org/abs/1707.06347)
 - [Boston Dynamics Spot](https://www.bostondynamics.com/products/spot)
 
-## 🤝 Contributing
+##  Contributing
 
 Want to improve this? Try:
 - Adding obstacle avoidance
@@ -238,10 +238,10 @@ Want to improve this? Try:
 - Adding vision-based navigation
 - Creating more complex tasks (climbing stairs)
 
-## 📝 License
+##  License
 
 MIT License - Feel free to use and modify!
 
 ---
 
-**Happy Training! 🤖🎉**
+**Happy Training! **
