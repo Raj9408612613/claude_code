@@ -1,0 +1,168 @@
+===============================================================================
+                    SPOT ROBOT RL TRAINING - SYSTEM ARCHITECTURE
+===============================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         YOUR TRAINING PIPELINE                           │
+└─────────────────────────────────────────────────────────────────────────┘
+
+                                STEP 1: ENVIRONMENT
+                     ┌───────────────────────────────────┐
+                     │      spot_env.py (Gymnasium)      │
+                     │                                   │
+                     │  Defines:                         │
+                     │  • Observation space (37 dims)    │
+                     │  • Action space (12 joints)       │
+                     │  • Reward function                │
+                     │  • Termination conditions         │
+                     └──────────────┬────────────────────┘
+                                    │
+                                    ↓
+                     ┌───────────────────────────────────┐
+                     │   spot_scene.xml (MuJoCo Model)   │
+                     │                                   │
+                     │  Contains:                        │
+                     │  • Robot structure (4 legs)       │
+                     │  • Joint definitions              │
+                     │  • Physics properties             │
+                     │  • Ground plane                   │
+                     └──────────────┬────────────────────┘
+                                    │
+                                    ↓
+
+                             STEP 2: RL ALGORITHM
+                     ┌───────────────────────────────────┐
+                     │   train_spot.py (PPO Training)    │
+                     │                                   │
+                     │  • Parallel environments (8x)     │
+                     │  • Policy network (256x256)       │
+                     │  • Value network (256x256)        │
+                     │  • Automatic checkpointing        │
+                     └──────────────┬────────────────────┘
+                                    │
+                      ┌─────────────┼─────────────┐
+                      ↓             ↓             ↓
+              ┌──────────┐   ┌──────────┐   ┌──────────┐
+              │  Env 1   │   │  Env 2   │...│  Env 8   │
+              └──────────┘   └──────────┘   └──────────┘
+                      │             │             │
+                      └─────────────┼─────────────┘
+                                    ↓
+                         Collect experiences
+                                    ↓
+                          Update policy (PPO)
+                                    ↓
+                              STEP 3: OUTPUTS
+                     ┌───────────────────────────────────┐
+                     │      Trained Model (.zip)         │
+                     │                                   │
+                     │  • Policy weights                 │
+                     │  • Value function weights         │
+                     │  • Training statistics            │
+                     └──────────────┬────────────────────┘
+                                    │
+                      ┌─────────────┼─────────────┐
+                      ↓             ↓             ↓
+              ┌──────────┐   ┌──────────┐   ┌──────────┐
+              │   Test   │   │ Analyze  │   │Visualize │
+              │test_spot │   │analyze_  │   │TensorBoard│
+              │   .py    │   │policy.py │   │          │
+              └──────────┘   └──────────┘   └──────────┘
+
+
+===============================================================================
+                            DATA FLOW DURING TRAINING
+===============================================================================
+
+    Observation (37 dims)              Action (12 dims)
+          │                                   │
+          │    ┌─────────────────┐           │
+          └───→│  Policy Network │──────────►│
+               │   (256x256)     │           │
+               └─────────────────┘           ↓
+                                       Robot executes
+                                            ↓
+                                    Next observation
+                                       + Reward
+                                            ↓
+                                    Store experience
+                                            ↓
+                                    Update networks
+                                         (PPO)
+
+
+===============================================================================
+                            OBSERVATION COMPONENTS
+===============================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Joint Positions (12)    │ Current angles of all joints                  │
+│ Joint Velocities (12)   │ Angular velocities                            │
+│ Body Orientation (4)    │ Quaternion (roll, pitch, yaw)                │
+│ Body Linear Vel (3)     │ Speed in x, y, z directions                   │
+│ Body Angular Vel (3)    │ Rotation speeds                               │
+│ Goal Direction (2)      │ Normalized vector to goal                     │
+│ Body Height (1)         │ Distance from ground                          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+
+===============================================================================
+                            ACTION COMPONENTS
+===============================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Front Left Leg   │ Hip, Thigh, Calf positions                           │
+│ Front Right Leg  │ Hip, Thigh, Calf positions                           │
+│ Rear Left Leg    │ Hip, Thigh, Calf positions                           │
+│ Rear Right Leg   │ Hip, Thigh, Calf positions                           │
+└─────────────────────────────────────────────────────────────────────────┘
+
+
+===============================================================================
+                            REWARD COMPONENTS
+===============================================================================
+
+Reward = Progress (2.0)              → Move toward goal
+       - Tilt penalty (0.5)          → Stay upright
+       - Height penalty (2.0)        → Keep proper height
+       - Energy penalty (0.005)      → Minimize joint velocities
+       - Control penalty (0.001)     → Smooth actions
+       + Goal bonus (100.0)          → Reach goal
+       + Alive bonus (0.5)           → Stay alive
+
+
+===============================================================================
+                         FILES AND THEIR PURPOSES
+===============================================================================
+
+Core Training:
+  • spot_env.py          ─► Defines the RL environment
+  • spot_scene.xml       ─► Robot physics model
+  • train_spot.py        ─► Main training loop
+  • config.py            ─► Easy parameter configuration
+
+Testing & Analysis:
+  • test_spot.py         ─► Test trained policies
+  • analyze_policy.py    ─► Generate performance plots
+  • quick_start.py       ─► Verify installation
+
+Documentation:
+  • README.md            ─► Full documentation
+  • QUICKSTART.md        ─► Quick setup guide
+  • requirements.txt     ─► Dependencies
+
+
+===============================================================================
+                         TRAINING PROGRESSION
+===============================================================================
+
+Time            What Robot Learns              Success Rate
+─────────────────────────────────────────────────────────────────────────
+0-100K steps    Standing up, basic balance              0%
+100K-500K       Walking forward, coordination           5-20%
+500K-2M         Stable walking, goal awareness          30-60%
+2M-5M           Efficient navigation                    70-90%
+5M+             Optimal policies, robustness            85-95%
+
+
+===============================================================================

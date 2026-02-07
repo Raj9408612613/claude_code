@@ -1,0 +1,12 @@
+# Core dependencies
+gymnasium>=0.29.0
+mujoco>=3.0.0
+numpy>=1.24.0
+
+# Reinforcement Learning
+stable-baselines3[extra]>=2.2.0
+tensorboard>=2.14.0
+
+# Utilities
+matplotlib>=3.7.0
+imageio>=2.31.0
