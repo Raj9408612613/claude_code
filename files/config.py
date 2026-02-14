@@ -208,68 +208,6 @@ DOMAIN_RANDOMIZATION = {
 
 
 # ============================================
-# OBSTACLE ENVIRONMENT CONFIGURATION
-# ============================================
-
-OBSTACLE_CONFIG = {
-    # Number of active obstacles per episode (max 8 defined in XML)
-    'n_obstacles_active': 5,
-
-    # Zone where obstacles may be placed (distance from origin)
-    'obstacle_zone_min': 1.5,  # metres
-    'obstacle_zone_max': 7.0,  # metres
-
-    # Reward weights for obstacle interaction
-    'collision_penalty': -5.0,      # per-step penalty on collision
-    'proximity_threshold': 0.6,     # start proximity penalty within this distance (m)
-    'proximity_penalty_weight': 1.0,  # max proximity penalty magnitude
-}
-
-
-# ============================================
-# CNN VISUAL POLICY CONFIGURATION
-# ============================================
-
-CNN_CONFIG = {
-    # Camera image dimensions (square)
-    'camera_width': 64,
-    'camera_height': 64,
-
-    # CNN feature extractor output dimension
-    'cnn_output_dim': 128,
-
-    # Proprioception MLP hidden dimension
-    'proprio_hidden_dim': 64,
-
-    # Policy / value head hidden layers (after feature extractor)
-    'policy_net_arch': [256, 128],
-    'value_net_arch': [256, 128],
-}
-
-
-# ============================================
-# OBSTACLE TRAINING CONFIGURATION
-# ============================================
-
-OBSTACLE_TRAINING_CONFIG = {
-    # Total timesteps (CNN training is more expensive so default is lower)
-    'total_timesteps': 2_000_000,
-
-    # Fewer parallel envs due to per-env rendering overhead
-    'n_envs': 4,
-
-    # Directories
-    'save_dir': './spot_obstacle_models',
-    'log_dir': './spot_obstacle_logs',
-
-    # Checkpoint / eval frequency
-    'checkpoint_freq': 50_000,
-    'eval_freq': 10_000,
-    'n_eval_episodes': 5,
-}
-
-
-# ============================================
 # HELPER FUNCTIONS
 # ============================================
 
@@ -284,9 +222,6 @@ def get_config():
         'joint_limits': JOINT_LIMITS,
         'curriculum': CURRICULUM_CONFIG,
         'domain_randomization': DOMAIN_RANDOMIZATION,
-        'obstacle': OBSTACLE_CONFIG,
-        'cnn': CNN_CONFIG,
-        'obstacle_training': OBSTACLE_TRAINING_CONFIG,
     }
 
 

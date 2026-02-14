@@ -11,6 +11,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 import gymnasium as gym
 from spot_env import SpotEnv
+import torch
 
 
 def make_env(rank, seed=0):
@@ -94,7 +95,7 @@ def train_spot(
         use_sde=False,
         policy_kwargs=dict(
             net_arch=dict(pi=[256, 256], vf=[256, 256]),
-            activation_fn=np.tanh
+            activation_fn=torch.nn.Tanh
         ),
         verbose=1,
         tensorboard_log=log_dir,
