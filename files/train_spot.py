@@ -83,7 +83,7 @@ def train_spot(
         env,
         learning_rate=3e-4,
         n_steps=2048,
-        batch_size=64,
+        batch_size=512,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
@@ -97,6 +97,7 @@ def train_spot(
             net_arch=dict(pi=[256, 256], vf=[256, 256]),
             activation_fn=torch.nn.Tanh
         ),
+        device="cuda",
         verbose=1,
         tensorboard_log=log_dir,
     )
