@@ -94,7 +94,7 @@ def train_spot(
         use_sde=False,
         policy_kwargs=dict(
             net_arch=dict(pi=[256, 256], vf=[256, 256]),
-            activation_fn=np.tanh
+            activation_fn=torch.nn.Tanh
         ),
         verbose=1,
         tensorboard_log=log_dir,
