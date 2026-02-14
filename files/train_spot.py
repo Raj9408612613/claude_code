@@ -27,7 +27,7 @@ def make_env(rank, seed=0):
 
 def train_spot(
     total_timesteps=5_000_000,
-    n_envs=8,
+    n_envs=os.cpu_count(),
     save_dir="./spot_models",
     log_dir="./spot_logs"
 ):
@@ -97,7 +97,7 @@ def train_spot(
             net_arch=dict(pi=[256, 256], vf=[256, 256]),
             activation_fn=torch.nn.Tanh
         ),
-        device="cuda",
+        device="cpu",
         verbose=1,
         tensorboard_log=log_dir,
     )
