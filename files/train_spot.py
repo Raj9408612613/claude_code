@@ -11,6 +11,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 import gymnasium as gym
 from spot_env import SpotEnv
+import torch
 
 
 def make_env(rank, seed=0):
