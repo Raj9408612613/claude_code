@@ -43,9 +43,16 @@ class SpotCNNExtractor(BaseFeaturesExtractor):
         image_space = observation_space["image"]
         proprio_space = observation_space["proprioception"]
 
-        n_channels = image_space.shape[2]  # (H, W, C) -> C
-        image_h = image_space.shape[0]
-        image_w = image_space.shape[1]
+        # SB3's VecTransposeImage converts (H, W, C) -> (C, H, W) before
+        # the observation reaches the policy, so handle both formats.
+        if image_space.shape[0] in (1, 3):  # channels-first (C, H, W)
+            n_channels = image_space.shape[0]
+            image_h = image_space.shape[1]
+            image_w = image_space.shape[2]
+        else:  # channels-last (H, W, C)
+            n_channels = image_space.shape[2]
+            image_h = image_space.shape[0]
+            image_w = image_space.shape[1]
 
         # --- CNN for camera images ---
         self.cnn = nn.Sequential(
