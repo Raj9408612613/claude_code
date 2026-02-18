@@ -255,8 +255,13 @@ OBSTACLE_TRAINING_CONFIG = {
     # Total timesteps (CNN training is more expensive so default is lower)
     'total_timesteps': 2_000_000,
 
-    # Fewer parallel envs due to per-env rendering overhead
-    'n_envs': 4,
+    # Parallel envs (8 is optimal for GPU — MuJoCo envs are CPU-bound,
+    # more envs feed the GPU bigger batches)
+    'n_envs': 8,
+
+    # GPU-optimized batch / rollout sizes
+    'batch_size': 256,
+    'n_steps': 4096,
 
     # Directories
     'save_dir': './spot_obstacle_models',
@@ -264,8 +269,27 @@ OBSTACLE_TRAINING_CONFIG = {
 
     # Checkpoint / eval frequency
     'checkpoint_freq': 50_000,
-    'eval_freq': 10_000,
+    'eval_freq': 25_000,
     'n_eval_episodes': 5,
+}
+
+
+# ============================================
+# QUICK-ITERATION PRESET (--fast flag)
+# ============================================
+
+FAST_TRAINING_CONFIG = {
+    'total_timesteps': 200_000,
+    'n_envs': 8,
+    'batch_size': 256,
+    'n_steps': 2048,
+    'n_epochs': 5,
+    'eval_freq': 50_000,
+    'checkpoint_freq': 100_000,
+    'n_eval_episodes': 3,
+    'physics_substeps': 4,
+    'save_dir': './spot_obstacle_models',
+    'log_dir': './spot_obstacle_logs',
 }
 
 
@@ -287,6 +311,7 @@ def get_config():
         'obstacle': OBSTACLE_CONFIG,
         'cnn': CNN_CONFIG,
         'obstacle_training': OBSTACLE_TRAINING_CONFIG,
+        'fast_training': FAST_TRAINING_CONFIG,
     }
 
 

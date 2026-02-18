@@ -41,6 +41,7 @@ class SpotObstacleEnv(gym.Env):
         n_obstacles_active=5,
         obstacle_zone_min=1.5,
         obstacle_zone_max=7.0,
+        physics_substeps=5,
     ):
         super().__init__()
 
@@ -52,6 +53,7 @@ class SpotObstacleEnv(gym.Env):
         self.n_obstacles_active = min(n_obstacles_active, self.N_OBSTACLES)
         self.obstacle_zone_min = obstacle_zone_min
         self.obstacle_zone_max = obstacle_zone_max
+        self.physics_substeps = physics_substeps
 
         # Load MuJoCo model
         xml_path = os.path.join(os.path.dirname(__file__), "spot_scene.xml")
@@ -138,6 +140,15 @@ class SpotObstacleEnv(gym.Env):
         # State tracking
         self.prev_base_pos = None
         self.obstacle_collision_count = 0
+
+        # Pre-allocated arrays to avoid per-step allocation
+        self._proprio_buf = np.zeros(proprioception_dim, dtype=np.float32)
+        self._standing_pose = np.array([
+            0.0, -0.9, 1.8,
+            0.0, -0.9, 1.8,
+            0.0, -0.9, 1.8,
+            0.0, -0.9, 1.8,
+        ])
 
         # For human rendering
         if self.render_mode == "human":
@@ -268,14 +279,8 @@ class SpotObstacleEnv(gym.Env):
         mujoco.mj_resetData(self.model, self.data)
 
         # Standing pose with noise
-        standing_pose = np.array([
-            0.0, -0.9, 1.8,
-            0.0, -0.9, 1.8,
-            0.0, -0.9, 1.8,
-            0.0, -0.9, 1.8,
-        ])
         joint_noise = self.np_random.uniform(-0.1, 0.1, size=12)
-        self.data.qpos[7:19] = standing_pose + joint_noise
+        self.data.qpos[7:19] = self._standing_pose + joint_noise
         self.data.qpos[2] = 0.35
 
         # Random goal
@@ -309,7 +314,7 @@ class SpotObstacleEnv(gym.Env):
 
         self.data.ctrl[:] = target_joint_pos
 
-        for _ in range(5):
+        for _ in range(self.physics_substeps):
             mujoco.mj_step(self.model, self.data)
 
         observation = self._get_obs()

@@ -84,9 +84,22 @@ class SpotCNNExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
         )
 
+        # Orthogonal init for faster convergence on GPU
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.orthogonal_(module.weight, gain=nn.init.calculate_gain("relu"))
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Linear):
+                nn.init.orthogonal_(module.weight, gain=nn.init.calculate_gain("relu"))
+                nn.init.zeros_(module.bias)
+
     def forward(self, observations: dict) -> torch.Tensor:
-        # Image: SB3 already converts images to float [0,1] and transposes to (B, C, H, W)
-        img = observations["image"].float()
+        img = observations["image"]
+
+        # Ensure float (SB3 normally handles this, but be safe)
+        if img.dtype != torch.float32:
+            img = img.float()
 
         # If image is in (B, H, W, C) format, permute to (B, C, H, W)
         if img.dim() == 4 and img.shape[-1] in (1, 3):
@@ -94,13 +107,14 @@ class SpotCNNExtractor(BaseFeaturesExtractor):
 
         # Normalise to [0, 1] if pixel values are in [0, 255]
         if img.max() > 1.0:
-            img = img / 255.0
+            img = img * (1.0 / 255.0)
 
-        cnn_features = self.cnn(img)
-        cnn_features = self.cnn_linear(cnn_features)
+        cnn_features = self.cnn_linear(self.cnn(img))
 
         # Proprioception
-        proprio = observations["proprioception"].float()
+        proprio = observations["proprioception"]
+        if proprio.dtype != torch.float32:
+            proprio = proprio.float()
         proprio_features = self.proprio_mlp(proprio)
 
         return torch.cat([cnn_features, proprio_features], dim=1)
