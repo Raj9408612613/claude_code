@@ -38,7 +38,7 @@ def detect_device():
     """Auto-detect the best available device."""
     if th.cuda.is_available():
         name = th.cuda.get_device_name(0)
-        mem = th.cuda.get_device_properties(0).total_mem / 1e9
+        mem = th.cuda.get_device_properties(0).total_memory / 1e9
         print(f"  GPU detected: {name} ({mem:.1f} GB)")
         return "cuda"
     print("  No GPU detected — using CPU")
