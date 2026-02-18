@@ -140,6 +140,8 @@ class SpotObstacleEnv(gym.Env):
         # State tracking
         self.prev_base_pos = None
         self.obstacle_collision_count = 0
+        self.camera_skip = 2           
+        self._cached_image = None
 
         # Pre-allocated arrays to avoid per-step allocation
         self._proprio_buf = np.zeros(proprioception_dim, dtype=np.float32)
@@ -184,10 +186,11 @@ class SpotObstacleEnv(gym.Env):
         ]).astype(np.float32)
 
     def _get_camera_image(self):
-        """Render RGB image from the robot's front-facing camera."""
-        self.renderer.update_scene(self.data, camera=self.front_camera_id)
-        img = self.renderer.render()
-        return img  # (H, W, 3) uint8
+        """Render RGB image from the robot's front-facing camera (with frame skip)."""
+        if self._cached_image is None or self.current_step % self.camera_skip == 0:
+            self.renderer.update_scene(self.data, camera=self.front_camera_id)
+            self._cached_image = self.renderer.render()
+        return self._cached_image
 
     def _get_obs(self):
         return {
@@ -302,6 +305,7 @@ class SpotObstacleEnv(gym.Env):
         self.current_step = 0
         self.prev_base_pos = self.data.qpos[0:2].copy()
         self.obstacle_collision_count = 0
+        self._cached_image = None    
 
         return self._get_obs(), self._get_info()
 
