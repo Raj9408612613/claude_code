@@ -8,12 +8,12 @@ Edit these parameters to customize your training
 # ============================================
 
 ENV_CONFIG = {
-    # Maximum steps per episode
-    'max_episode_steps': 1000,
-    
-    # Goal position parameters
-    'goal_distance_min': 3.0,  # Minimum distance to goal (meters)
-    'goal_distance_max': 8.0,  # Maximum distance to goal (meters)
+    # Maximum steps per episode (500 for Colab budget, 1000 for full training)
+    'max_episode_steps': 500,
+
+    # Goal position parameters (closer goals = easier to learn)
+    'goal_distance_min': 2.0,  # Minimum distance to goal (meters)
+    'goal_distance_max': 5.0,  # Maximum distance to goal (meters)
     'goal_tolerance': 0.5,     # Success threshold (meters)
     
     # Initial robot state
@@ -103,9 +103,9 @@ PPO_CONFIG = {
     # Max gradient norm
     'max_grad_norm': 0.5,
     
-    # Neural network architecture
-    'policy_net_arch': [256, 256],  # Hidden layers for policy network
-    'value_net_arch': [256, 256],   # Hidden layers for value network
+    # Neural network architecture (128 for Colab budget, 256 for full training)
+    'policy_net_arch': [128, 128],  # Hidden layers for policy network
+    'value_net_arch': [128, 128],   # Hidden layers for value network
     
     # Use State Dependent Exploration (SDE)
     'use_sde': False,
@@ -117,11 +117,11 @@ PPO_CONFIG = {
 # ============================================
 
 TRAINING_CONFIG = {
-    # Total number of training steps
-    'total_timesteps': 5_000_000,
-    
-    # Number of parallel environments
-    'n_envs': 8,
+    # Total number of training steps (500k for Colab, 5M for full training)
+    'total_timesteps': 500_000,
+
+    # Number of parallel environments (4 for Colab T4, 8 for local)
+    'n_envs': 4,
     
     # Save checkpoint every N steps (per environment)
     'checkpoint_freq': 50_000,
