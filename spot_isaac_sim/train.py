@@ -205,29 +205,24 @@ def make_env(rank, seed=0, headless=True):
 
 
 def train(
-    total_timesteps=None,
-    n_envs=None,
-    save_dir=None,
-    log_dir=None,
     headless=True,
     continue_from=None,
 ):
     """
     Train Spot navigation policy.
 
+    All parameters are read from config. Call config.apply_overrides()
+    before this function to change any values.
+
     Args:
-        total_timesteps: Total training steps (default from config)
-        n_envs: Number of parallel environments
-        save_dir: Model save directory
-        log_dir: TensorBoard log directory
         headless: Run without rendering
         continue_from: Path to model to continue training from
     """
     train_cfg = config.TRAINING
-    total_timesteps = total_timesteps or train_cfg["total_timesteps"]
-    n_envs = n_envs or train_cfg["n_envs"]
-    save_dir = save_dir or train_cfg["save_dir"]
-    log_dir = log_dir or train_cfg["log_dir"]
+    total_timesteps = train_cfg["total_timesteps"]
+    n_envs = train_cfg["n_envs"]
+    save_dir = train_cfg["save_dir"]
+    log_dir = train_cfg["log_dir"]
 
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
@@ -391,13 +386,34 @@ if __name__ == "__main__":
         help="Enable rendering (slower, for debugging)",
     )
 
+    parser.add_argument(
+        "--max_episode_steps", type=int, default=None,
+        help="Max steps per episode (default: from config)",
+    )
+    parser.add_argument(
+        "--combined_mlp_layers", type=int, nargs="+", default=None,
+        help="Policy network hidden layers, e.g. --combined_mlp_layers 128 128",
+    )
+    parser.add_argument(
+        "--checkpoint_freq", type=int, default=None,
+        help="Save checkpoint every N steps (default: from config)",
+    )
+
     args = parser.parse_args()
 
-    model = train(
+    # Apply any CLI overrides to config before training
+    config.apply_overrides(
         total_timesteps=args.timesteps,
         n_envs=args.n_envs,
         save_dir=args.save_dir,
         log_dir=args.log_dir,
+        max_episode_steps=args.max_episode_steps,
+        combined_mlp_layers=args.combined_mlp_layers,
+        checkpoint_freq=args.checkpoint_freq,
+    )
+    config.print_active_config()
+
+    model = train(
         headless=not args.render,
         continue_from=args.continue_from,
     )
