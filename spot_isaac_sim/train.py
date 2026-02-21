@@ -45,7 +45,6 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from . import config
-from .navigation_env import SpotNavigationEnv
 
 
 # ============================================================================
@@ -198,6 +197,7 @@ def make_env(rank, seed=0, headless=True):
         Callable that creates a wrapped environment
     """
     def _init():
+        from .navigation_env import SpotNavigationEnv  # deferred until after SimulationApp
         env = SpotNavigationEnv(headless=headless)
         env.reset(seed=seed + rank)
         return Monitor(env)
@@ -218,6 +218,9 @@ def train(
         headless: Run without rendering
         continue_from: Path to model to continue training from
     """
+    from . import ensure_isaac_sim
+    ensure_isaac_sim(headless=headless)
+
     train_cfg = config.TRAINING
     total_timesteps = train_cfg["total_timesteps"]
     n_envs = train_cfg["n_envs"]
