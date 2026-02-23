@@ -532,3 +532,127 @@ ACTION = {
     "control_mode": "position",         # Position-based PD control
     "control_frequency": 50,            # Hz
 }
+
+
+# ============================================================================
+# OVERRIDE SYSTEM
+# ============================================================================
+# Call apply_overrides() to change any parameter at runtime.
+# If a value is not provided (None), the default above is kept.
+#
+# Example (in Colab notebook or script):
+#   from spot_isaac_sim import config
+#   config.apply_overrides(
+#       total_timesteps=500_000,
+#       max_episode_steps=500,
+#       combined_mlp_layers=[128, 128],
+#   )
+
+# Map of override key → (config_dict_name, key_in_dict)
+_OVERRIDE_MAP = {
+    # Training
+    "total_timesteps":      (TRAINING, "total_timesteps"),
+    "n_envs":               (TRAINING, "n_envs"),
+    "learning_rate":        (TRAINING, "learning_rate"),
+    "n_steps":              (TRAINING, "n_steps"),
+    "batch_size":           (TRAINING, "batch_size"),
+    "n_epochs":             (TRAINING, "n_epochs"),
+    "gamma":                (TRAINING, "gamma"),
+    "gae_lambda":           (TRAINING, "gae_lambda"),
+    "clip_range":           (TRAINING, "clip_range"),
+    "ent_coef":             (TRAINING, "ent_coef"),
+    "vf_coef":              (TRAINING, "vf_coef"),
+    "max_grad_norm":        (TRAINING, "max_grad_norm"),
+    "checkpoint_freq":      (TRAINING, "checkpoint_freq"),
+    "eval_freq":            (TRAINING, "eval_freq"),
+    "n_eval_episodes":      (TRAINING, "n_eval_episodes"),
+    "save_dir":             (TRAINING, "save_dir"),
+    "log_dir":              (TRAINING, "log_dir"),
+    "cnn_features_dim":     (TRAINING, "cnn_features_dim"),
+    "mlp_proprio_layers":   (TRAINING, "mlp_proprio_layers"),
+    "combined_mlp_layers":  (TRAINING, "combined_mlp_layers"),
+    "curriculum_enabled":   None,  # handled specially
+    # Termination / Environment
+    "max_episode_steps":    (TERMINATION, "max_episode_steps"),
+    "min_height":           (TERMINATION, "min_height"),
+    # Reward
+    "goal_reached_bonus":   (REWARD_CONFIG, "goal_reached_bonus"),
+    "progress_weight":      (REWARD_CONFIG, "progress_weight"),
+    "collision_penalty":    (REWARD_CONFIG, "collision_penalty"),
+    "alive_bonus":          (REWARD_CONFIG, "alive_bonus"),
+    # Goal distance
+    "goal_distance_range":  None,  # handled specially
+}
+
+
+def apply_overrides(**kwargs):
+    """
+    Override any config parameter at runtime.
+    Pass only the values you want to change; everything else keeps its default.
+
+    Example:
+        config.apply_overrides(
+            total_timesteps=500_000,
+            max_episode_steps=500,
+            combined_mlp_layers=[128, 128],
+            n_envs=4,
+            checkpoint_freq=50_000,
+            goal_distance_range=[2.0, 5.0],
+            curriculum_enabled=False,
+            save_dir="/content/drive/MyDrive/robot_training/models",
+            log_dir="/content/drive/MyDrive/robot_training/logs",
+        )
+    """
+    changed = []
+
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+
+        # Special cases
+        if key == "curriculum_enabled":
+            TRAINING["curriculum"]["enabled"] = value
+            changed.append(f"  curriculum.enabled = {value}")
+            continue
+
+        if key == "goal_distance_range":
+            DOMAIN_RANDOMIZATION["goal_position"]["distance_range"] = list(value)
+            changed.append(f"  goal_distance_range = {value}")
+            continue
+
+        # Standard lookup
+        if key in _OVERRIDE_MAP:
+            target_dict, target_key = _OVERRIDE_MAP[key]
+            old_val = target_dict[target_key]
+            target_dict[target_key] = value
+            changed.append(f"  {key}: {old_val} -> {value}")
+        else:
+            print(f"[config] WARNING: unknown override key '{key}', ignored")
+
+    if changed:
+        print(f"[config] Applied {len(changed)} override(s):")
+        for line in changed:
+            print(line)
+
+
+def print_active_config():
+    """Print the currently active training-relevant parameters."""
+    print("=" * 60)
+    print("ACTIVE CONFIGURATION")
+    print("=" * 60)
+    print(f"  total_timesteps:      {TRAINING['total_timesteps']:,}")
+    print(f"  max_episode_steps:    {TERMINATION['max_episode_steps']}")
+    print(f"  n_envs:               {TRAINING['n_envs']}")
+    print(f"  learning_rate:        {TRAINING['learning_rate']}")
+    print(f"  batch_size:           {TRAINING['batch_size']}")
+    print(f"  n_steps:              {TRAINING['n_steps']}")
+    print(f"  n_epochs:             {TRAINING['n_epochs']}")
+    print(f"  combined_mlp_layers:  {TRAINING['combined_mlp_layers']}")
+    print(f"  cnn_features_dim:     {TRAINING['cnn_features_dim']}")
+    print(f"  checkpoint_freq:      {TRAINING['checkpoint_freq']:,}")
+    print(f"  eval_freq:            {TRAINING['eval_freq']:,}")
+    print(f"  curriculum_enabled:   {TRAINING['curriculum']['enabled']}")
+    print(f"  goal_distance_range:  {DOMAIN_RANDOMIZATION['goal_position']['distance_range']}")
+    print(f"  save_dir:             {TRAINING['save_dir']}")
+    print(f"  log_dir:              {TRAINING['log_dir']}")
+    print("=" * 60)
