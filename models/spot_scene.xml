@@ -1,0 +1,278 @@
+<mujoco model="spot_scene">
+  <!--
+    Spot Robot Scene — MJCF for MuJoCo MJX (GPU-batched physics)
+    ============================================================
+    Replaces the Isaac Sim USD model.
+    Joint names match spot_isaac_sim/config.py exactly.
+    25 mocap obstacle boxes + 5 dynamic mocap cylinders.
+    5 camera sites replicate config.py CAMERA_RIG positions.
+  -->
+
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.005" gravity="0 0 -9.81" integrator="Euler"/>
+
+  <default>
+    <joint damping="1.0" armature="0.01" frictionloss="0.1"/>
+    <geom condim="3" friction="0.8 0.02 0.01" rgba="0.6 0.6 0.6 1"/>
+    <motor ctrlrange="-3.14 3.14" ctrllimited="true"/>
+    <position kp="100" kv="10" ctrlrange="-3.14 3.14" ctrllimited="true"/>
+    <default class="spot_body">
+      <geom type="box" rgba="0.3 0.3 0.35 1"/>
+    </default>
+    <default class="spot_leg">
+      <geom type="capsule" rgba="0.25 0.25 0.3 1" size="0.025"/>
+    </default>
+    <default class="obstacle">
+      <geom type="box" rgba="0.7 0.4 0.2 1" condim="3"/>
+    </default>
+    <default class="dynamic_obs">
+      <geom type="cylinder" rgba="0.2 0.5 0.8 0.9" condim="3"/>
+    </default>
+  </default>
+
+  <!-- ================================================================ -->
+  <!-- ASSETS                                                            -->
+  <!-- ================================================================ -->
+  <asset>
+    <texture name="floor_tex" type="2d" builtin="checker"
+             rgb1="0.6 0.6 0.6" rgb2="0.5 0.5 0.5" width="512" height="512"/>
+    <material name="floor_mat" texture="floor_tex" texrepeat="8 8" reflectance="0.1"/>
+    <texture name="wall_tex" type="2d" builtin="flat"
+             rgb1="0.85 0.85 0.82" width="128" height="128"/>
+    <material name="wall_mat" texture="wall_tex" reflectance="0.05"/>
+  </asset>
+
+  <!-- ================================================================ -->
+  <!-- WORLD BODY                                                         -->
+  <!-- ================================================================ -->
+  <worldbody>
+
+    <!-- Floor -->
+    <geom name="floor" type="plane" size="15 15 0.1"
+          material="floor_mat" rgba="0.6 0.6 0.6 1" condim="3"/>
+
+    <!-- Room walls (10×10 m room) — fixed -->
+    <geom name="wall_north" type="box" size="5 0.1 1.5"
+          pos="0 5 1.5" material="wall_mat" rgba="0.85 0.85 0.82 1"/>
+    <geom name="wall_south" type="box" size="5 0.1 1.5"
+          pos="0 -5 1.5" material="wall_mat" rgba="0.85 0.85 0.82 1"/>
+    <geom name="wall_east" type="box" size="0.1 5 1.5"
+          pos="5 0 1.5" material="wall_mat" rgba="0.85 0.85 0.82 1"/>
+    <geom name="wall_west" type="box" size="0.1 5 1.5"
+          pos="-5 0 1.5" material="wall_mat" rgba="0.85 0.85 0.82 1"/>
+
+    <!-- ============================================================ -->
+    <!-- STATIC OBSTACLE MOCAP BODIES (25 max from config)            -->
+    <!-- Positions set each episode via data.mocap_pos                -->
+    <!-- ============================================================ -->
+    <body name="obstacle_0"  mocap="true" pos="100 0 0.5"><geom class="obstacle" size="0.3 0.3 0.5"/></body>
+    <body name="obstacle_1"  mocap="true" pos="100 1 0.5"><geom class="obstacle" size="0.25 0.4 0.4"/></body>
+    <body name="obstacle_2"  mocap="true" pos="100 2 0.5"><geom class="obstacle" size="0.2 0.2 0.8"/></body>
+    <body name="obstacle_3"  mocap="true" pos="100 3 0.5"><geom class="obstacle" size="0.4 0.2 0.45"/></body>
+    <body name="obstacle_4"  mocap="true" pos="100 4 0.5"><geom class="obstacle" size="0.35 0.35 0.35"/></body>
+    <body name="obstacle_5"  mocap="true" pos="100 5 0.5"><geom class="obstacle" size="0.3 0.3 0.5"/></body>
+    <body name="obstacle_6"  mocap="true" pos="100 6 0.5"><geom class="obstacle" size="0.5 0.2 0.6"/></body>
+    <body name="obstacle_7"  mocap="true" pos="100 7 0.5"><geom class="obstacle" size="0.2 0.5 0.4"/></body>
+    <body name="obstacle_8"  mocap="true" pos="100 8 0.5"><geom class="obstacle" size="0.4 0.4 0.3"/></body>
+    <body name="obstacle_9"  mocap="true" pos="100 9 0.5"><geom class="obstacle" size="0.3 0.25 0.7"/></body>
+    <body name="obstacle_10" mocap="true" pos="100 10 0.5"><geom class="obstacle" size="0.2 0.3 0.5"/></body>
+    <body name="obstacle_11" mocap="true" pos="100 11 0.5"><geom class="obstacle" size="0.35 0.35 0.4"/></body>
+    <body name="obstacle_12" mocap="true" pos="100 12 0.5"><geom class="obstacle" size="0.45 0.2 0.45"/></body>
+    <body name="obstacle_13" mocap="true" pos="100 13 0.5"><geom class="obstacle" size="0.3 0.4 0.3"/></body>
+    <body name="obstacle_14" mocap="true" pos="100 14 0.5"><geom class="obstacle" size="0.25 0.25 0.6"/></body>
+    <body name="obstacle_15" mocap="true" pos="100 15 0.5"><geom class="obstacle" size="0.3 0.3 0.5"/></body>
+    <body name="obstacle_16" mocap="true" pos="100 16 0.5"><geom class="obstacle" size="0.4 0.3 0.35"/></body>
+    <body name="obstacle_17" mocap="true" pos="100 17 0.5"><geom class="obstacle" size="0.2 0.4 0.55"/></body>
+    <body name="obstacle_18" mocap="true" pos="100 18 0.5"><geom class="obstacle" size="0.35 0.2 0.4"/></body>
+    <body name="obstacle_19" mocap="true" pos="100 19 0.5"><geom class="obstacle" size="0.3 0.3 0.5"/></body>
+    <body name="obstacle_20" mocap="true" pos="100 20 0.5"><geom class="obstacle" size="0.4 0.4 0.4"/></body>
+    <body name="obstacle_21" mocap="true" pos="100 21 0.5"><geom class="obstacle" size="0.25 0.35 0.45"/></body>
+    <body name="obstacle_22" mocap="true" pos="100 22 0.5"><geom class="obstacle" size="0.3 0.25 0.5"/></body>
+    <body name="obstacle_23" mocap="true" pos="100 23 0.5"><geom class="obstacle" size="0.45 0.3 0.35"/></body>
+    <body name="obstacle_24" mocap="true" pos="100 24 0.5"><geom class="obstacle" size="0.2 0.2 0.7"/></body>
+
+    <!-- ============================================================ -->
+    <!-- DYNAMIC OBSTACLE MOCAP BODIES (5 max from config)            -->
+    <!-- Moved each step to simulate walking people / carts           -->
+    <!-- ============================================================ -->
+    <body name="dynobs_0" mocap="true" pos="100 0 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
+    <body name="dynobs_1" mocap="true" pos="100 1 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
+    <body name="dynobs_2" mocap="true" pos="100 2 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
+    <body name="dynobs_3" mocap="true" pos="100 3 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
+    <body name="dynobs_4" mocap="true" pos="100 4 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
+
+    <!-- ============================================================ -->
+    <!-- SPOT ROBOT BODY                                               -->
+    <!-- freejoint: robot can move freely in the world                -->
+    <!-- ============================================================ -->
+    <body name="base_link" pos="0 0 0.5">
+      <freejoint name="root"/>
+
+      <!-- Main trunk -->
+      <inertial pos="0 0 0" mass="14.0"
+                diaginertia="0.11 0.33 0.33"/>
+      <geom name="trunk" class="spot_body" size="0.30 0.15 0.08"/>
+
+      <!-- ── CAMERA SITES (match config.py CAMERA_RIG exactly) ── -->
+      <!-- front_center: pos=[0.32,0.0,0.05], rot=[0°,-10°,0°] euler xyz -->
+      <site name="cam_front_center" pos="0.32 0.0 0.05"
+            euler="0 -0.1745 0" size="0.01"/>
+      <!-- front_left: pos=[0.20,0.16,0.05], rot=[0°,-10°,70°] -->
+      <site name="cam_front_left" pos="0.20 0.16 0.05"
+            euler="0 -0.1745 1.2217" size="0.01"/>
+      <!-- front_right: pos=[0.20,-0.16,0.05], rot=[0°,-10°,-70°] -->
+      <site name="cam_front_right" pos="0.20 -0.16 0.05"
+            euler="0 -0.1745 -1.2217" size="0.01"/>
+      <!-- rear_left: pos=[-0.28,0.14,0.05], rot=[0°,-10°,145°] -->
+      <site name="cam_rear_left" pos="-0.28 0.14 0.05"
+            euler="0 -0.1745 2.5307" size="0.01"/>
+      <!-- rear_right: pos=[-0.28,-0.14,0.05], rot=[0°,-10°,-145°] -->
+      <site name="cam_rear_right" pos="-0.28 -0.14 0.05"
+            euler="0 -0.1745 -2.5307" size="0.01"/>
+
+      <!-- IMU site at body center -->
+      <site name="imu" pos="0 0 0" size="0.01"/>
+
+      <!-- ============================================================ -->
+      <!-- FRONT-LEFT LEG                                                -->
+      <!-- ============================================================ -->
+      <body name="fl_hip" pos="0.29 0.055 0">
+        <joint name="fl_hx" type="hinge" axis="1 0 0"
+               range="-0.8 0.8" ref="0.0"/>
+        <geom name="fl_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <body name="fl_upper_leg" pos="0 0.055 0">
+          <joint name="fl_hy" type="hinge" axis="0 1 0"
+                 range="-0.6 2.4" ref="0.8"/>
+          <geom name="fl_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <body name="fl_lower_leg" pos="0 0 -0.25">
+            <joint name="fl_kn" type="hinge" axis="0 1 0"
+                   range="-2.8 -0.5" ref="-1.6"/>
+            <geom name="fl_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+            <geom name="fl_foot" type="sphere" size="0.02" pos="0 0 -0.25"
+                  rgba="0.1 0.1 0.1 1" condim="6"/>
+          </body>
+        </body>
+      </body>
+
+      <!-- ============================================================ -->
+      <!-- FRONT-RIGHT LEG                                               -->
+      <!-- ============================================================ -->
+      <body name="fr_hip" pos="0.29 -0.055 0">
+        <joint name="fr_hx" type="hinge" axis="1 0 0"
+               range="-0.8 0.8" ref="0.0"/>
+        <geom name="fr_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <body name="fr_upper_leg" pos="0 -0.055 0">
+          <joint name="fr_hy" type="hinge" axis="0 1 0"
+                 range="-0.6 2.4" ref="0.8"/>
+          <geom name="fr_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <body name="fr_lower_leg" pos="0 0 -0.25">
+            <joint name="fr_kn" type="hinge" axis="0 1 0"
+                   range="-2.8 -0.5" ref="-1.6"/>
+            <geom name="fr_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+            <geom name="fr_foot" type="sphere" size="0.02" pos="0 0 -0.25"
+                  rgba="0.1 0.1 0.1 1" condim="6"/>
+          </body>
+        </body>
+      </body>
+
+      <!-- ============================================================ -->
+      <!-- HIND-LEFT LEG                                                 -->
+      <!-- ============================================================ -->
+      <body name="hl_hip" pos="-0.26 0.055 0">
+        <joint name="hl_hx" type="hinge" axis="1 0 0"
+               range="-0.8 0.8" ref="0.0"/>
+        <geom name="hl_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <body name="hl_upper_leg" pos="0 0.055 0">
+          <joint name="hl_hy" type="hinge" axis="0 1 0"
+                 range="-0.6 2.4" ref="0.8"/>
+          <geom name="hl_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <body name="hl_lower_leg" pos="0 0 -0.25">
+            <joint name="hl_kn" type="hinge" axis="0 1 0"
+                   range="-2.8 -0.5" ref="-1.6"/>
+            <geom name="hl_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+            <geom name="hl_foot" type="sphere" size="0.02" pos="0 0 -0.25"
+                  rgba="0.1 0.1 0.1 1" condim="6"/>
+          </body>
+        </body>
+      </body>
+
+      <!-- ============================================================ -->
+      <!-- HIND-RIGHT LEG                                                -->
+      <!-- ============================================================ -->
+      <body name="hr_hip" pos="-0.26 -0.055 0">
+        <joint name="hr_hx" type="hinge" axis="1 0 0"
+               range="-0.8 0.8" ref="0.0"/>
+        <geom name="hr_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <body name="hr_upper_leg" pos="0 -0.055 0">
+          <joint name="hr_hy" type="hinge" axis="0 1 0"
+                 range="-0.6 2.4" ref="0.8"/>
+          <geom name="hr_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <body name="hr_lower_leg" pos="0 0 -0.25">
+            <joint name="hr_kn" type="hinge" axis="0 1 0"
+                   range="-2.8 -0.5" ref="-1.6"/>
+            <geom name="hr_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+            <geom name="hr_foot" type="sphere" size="0.02" pos="0 0 -0.25"
+                  rgba="0.1 0.1 0.1 1" condim="6"/>
+          </body>
+        </body>
+      </body>
+
+    </body> <!-- end base_link -->
+
+  </worldbody>
+
+  <!-- ================================================================ -->
+  <!-- ACTUATORS — position control, kp=100 kv=10 matching config.py   -->
+  <!-- ================================================================ -->
+  <actuator>
+    <position name="act_fl_hx" joint="fl_hx" kp="100" kv="10"/>
+    <position name="act_fl_hy" joint="fl_hy" kp="100" kv="10"/>
+    <position name="act_fl_kn" joint="fl_kn" kp="100" kv="10"/>
+    <position name="act_fr_hx" joint="fr_hx" kp="100" kv="10"/>
+    <position name="act_fr_hy" joint="fr_hy" kp="100" kv="10"/>
+    <position name="act_fr_kn" joint="fr_kn" kp="100" kv="10"/>
+    <position name="act_hl_hx" joint="hl_hx" kp="100" kv="10"/>
+    <position name="act_hl_hy" joint="hl_hy" kp="100" kv="10"/>
+    <position name="act_hl_kn" joint="hl_kn" kp="100" kv="10"/>
+    <position name="act_hr_hx" joint="hr_hx" kp="100" kv="10"/>
+    <position name="act_hr_hy" joint="hr_hy" kp="100" kv="10"/>
+    <position name="act_hr_kn" joint="hr_kn" kp="100" kv="10"/>
+  </actuator>
+
+  <!-- ================================================================ -->
+  <!-- SENSORS                                                           -->
+  <!-- ================================================================ -->
+  <sensor>
+    <!-- Joint positions (12) -->
+    <jointpos name="jpos_fl_hx" joint="fl_hx"/>
+    <jointpos name="jpos_fl_hy" joint="fl_hy"/>
+    <jointpos name="jpos_fl_kn" joint="fl_kn"/>
+    <jointpos name="jpos_fr_hx" joint="fr_hx"/>
+    <jointpos name="jpos_fr_hy" joint="fr_hy"/>
+    <jointpos name="jpos_fr_kn" joint="fr_kn"/>
+    <jointpos name="jpos_hl_hx" joint="hl_hx"/>
+    <jointpos name="jpos_hl_hy" joint="hl_hy"/>
+    <jointpos name="jpos_hl_kn" joint="hl_kn"/>
+    <jointpos name="jpos_hr_hx" joint="hr_hx"/>
+    <jointpos name="jpos_hr_hy" joint="hr_hy"/>
+    <jointpos name="jpos_hr_kn" joint="hr_kn"/>
+    <!-- Joint velocities (12) -->
+    <jointvel name="jvel_fl_hx" joint="fl_hx"/>
+    <jointvel name="jvel_fl_hy" joint="fl_hy"/>
+    <jointvel name="jvel_fl_kn" joint="fl_kn"/>
+    <jointvel name="jvel_fr_hx" joint="fr_hx"/>
+    <jointvel name="jvel_fr_hy" joint="fr_hy"/>
+    <jointvel name="jvel_fr_kn" joint="fr_kn"/>
+    <jointvel name="jvel_hl_hx" joint="hl_hx"/>
+    <jointvel name="jvel_hl_hy" joint="hl_hy"/>
+    <jointvel name="jvel_hl_kn" joint="hl_kn"/>
+    <jointvel name="jvel_hr_hx" joint="hr_hx"/>
+    <jointvel name="jvel_hr_hy" joint="hr_hy"/>
+    <jointvel name="jvel_hr_kn" joint="hr_kn"/>
+    <!-- IMU -->
+    <framequat  name="imu_quat"   objtype="site" objname="imu"/>
+    <framelinvel name="imu_linvel" objtype="site" objname="imu"/>
+    <frameangvel name="imu_angvel" objtype="site" objname="imu"/>
+  </sensor>
+
+</mujoco>

@@ -1,0 +1,24 @@
+# MuJoCo MJX + Warp + JAX PPO dependencies
+# ==========================================
+# Run: pip install -r requirements_mjx.txt
+#
+# GPU setup (pick ONE line for your CUDA version):
+#   CUDA 12: pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+#   CUDA 11: pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# ── Physics (MuJoCo + MJX) ───────────────────────────────────────────────────
+mujoco>=3.1.0
+
+# ── GPU rendering (NVIDIA Warp) ───────────────────────────────────────────────
+warp-lang>=1.0.0
+
+# ── JAX (CPU fallback; for GPU see note above) ────────────────────────────────
+jax>=0.4.25
+jaxlib>=0.4.25
+
+# ── Neural networks + optimization ────────────────────────────────────────────
+flax>=0.8.0
+optax>=0.2.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+numpy>=1.24.0
