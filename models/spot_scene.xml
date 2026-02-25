@@ -4,7 +4,7 @@
     ============================================================
     Replaces the Isaac Sim USD model.
     Joint names match spot_isaac_sim/config.py exactly.
-    25 mocap obstacle boxes + 5 dynamic mocap cylinders.
+    25 mocap obstacle boxes + 5 dynamic mocap cylinders + 1 humanoid mocap body.
     5 camera sites replicate config.py CAMERA_RIG positions.
   -->
 
@@ -100,6 +100,33 @@
     <body name="dynobs_2" mocap="true" pos="100 2 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
     <body name="dynobs_3" mocap="true" pos="100 3 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
     <body name="dynobs_4" mocap="true" pos="100 4 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
+
+    <!-- ============================================================ -->
+    <!-- HUMANOID OBSTACLE MOCAP BODY                                  -->
+    <!-- Parked at 100 0 0 by default; placed near goal at reset.     -->
+    <!-- Single rigid mocap body — all geoms move together.           -->
+    <!-- Torso origin at z=1.0 (world); feet reach ~z=0 (floor).     -->
+    <!-- ============================================================ -->
+    <body name="human_0" mocap="true" pos="100 0 1.0">
+      <!-- torso: vertical capsule, half-length=0.25, radius=0.12 -->
+      <geom name="human_0_torso" type="capsule" size="0.12 0.25"
+            pos="0 0 0" rgba="0.8 0.6 0.5 1"/>
+      <!-- head: sphere above torso -->
+      <geom name="human_0_head" type="sphere" size="0.12"
+            pos="0 0 0.42" rgba="0.8 0.6 0.5 1"/>
+      <!-- left upper leg -->
+      <geom name="human_0_lul" type="capsule" size="0.07 0.2"
+            pos="-0.1 0 -0.45" rgba="0.3 0.3 0.7 1"/>
+      <!-- right upper leg -->
+      <geom name="human_0_rul" type="capsule" size="0.07 0.2"
+            pos="0.1 0 -0.45" rgba="0.3 0.3 0.7 1"/>
+      <!-- left lower leg -->
+      <geom name="human_0_lll" type="capsule" size="0.06 0.2"
+            pos="-0.1 0 -0.85" rgba="0.3 0.3 0.7 1"/>
+      <!-- right lower leg -->
+      <geom name="human_0_rll" type="capsule" size="0.06 0.2"
+            pos="0.1 0 -0.85" rgba="0.3 0.3 0.7 1"/>
+    </body>
 
     <!-- ============================================================ -->
     <!-- SPOT ROBOT BODY                                               -->

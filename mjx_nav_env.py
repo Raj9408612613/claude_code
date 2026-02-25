@@ -29,8 +29,9 @@ import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
 
-from warp_cameras import WarpDepthRenderer, N_CAMS, CAM_H, CAM_W, N_OBS
+from warp_cameras import WarpDepthRenderer, N_CAMS, CAM_H, CAM_W, N_OBS, N_STATIC, N_DYNAMIC
 from jax_reward import compute_reward, check_termination
+from config import HUMANOID_OBSTACLE as HUMANOID_CFG
 
 # ── Joint limits (from config.py SPOT_ROBOT) ─────────────────────────────────
 JOINT_LOWER = jnp.array([-0.8,-0.6,-2.8]*4, dtype=jnp.float32)
@@ -42,6 +43,9 @@ ROOM_HALF = 4.5   # keep 0.5m from walls
 
 # Number of physics sub-steps per RL step (control @ 50 Hz, physics @ 200 Hz)
 PHYSICS_SUBSTEPS = 4
+
+# Index of the humanoid body in mocap_pos (after all static + dynamic obs)
+HUMANOID_MOCAP_IDX = N_STATIC + N_DYNAMIC   # = 30
 
 
 class SpotMJXEnv:
@@ -166,12 +170,24 @@ class SpotMJXEnv:
 
         dx_batch = dx_batch.replace(qpos=qpos)
 
-        # Randomize obstacles: scatter N_OBS mocap bodies
+        # Randomize static + dynamic obstacles: indices 0 .. N_OBS-2
         rng, k4 = jax.random.split(rng)
         obs_xy = jax.random.uniform(k4, (self.n_envs, N_OBS, 2),
                                     minval=-ROOM_HALF, maxval=ROOM_HALF)
         obs_z  = jnp.ones((self.n_envs, N_OBS, 1)) * 0.5
         obs_pos_new = jnp.concatenate([obs_xy, obs_z], axis=-1)  # (B, N_OBS, 3)
+
+        # ── Place humanoid near the randomised goal ───────────────────
+        # Start at goal + patrol_radius along X, clipped to room bounds.
+        patrol_r = float(HUMANOID_CFG["patrol_radius"])
+        human_x0 = jnp.clip(goal_xy[:, 0] + patrol_r, -ROOM_HALF, ROOM_HALF)
+        human_y0 = jnp.clip(goal_xy[:, 1],             -ROOM_HALF, ROOM_HALF)
+        human_init_pos = jnp.stack([human_x0, human_y0], axis=-1)  # (B, 2)
+
+        obs_pos_new = (obs_pos_new
+                       .at[:, HUMANOID_MOCAP_IDX, 0].set(human_x0)
+                       .at[:, HUMANOID_MOCAP_IDX, 1].set(human_y0)
+                       .at[:, HUMANOID_MOCAP_IDX, 2].set(HUMANOID_CFG["mocap_z"]))
 
         # Carry state
         step_count   = jnp.zeros(self.n_envs, dtype=jnp.int32)
@@ -179,12 +195,16 @@ class SpotMJXEnv:
         prev_action  = jnp.zeros((self.n_envs, 12), dtype=jnp.float32)
 
         state = {
-            "dx":          dx_batch,
-            "mocap_pos":   obs_pos_new,
-            "goal_pos":    goal_xy,
-            "step_count":  step_count,
-            "prev_dist":   prev_dist,
-            "prev_action": prev_action,
+            "dx":           dx_batch,
+            "mocap_pos":    obs_pos_new,
+            "goal_pos":     goal_xy,
+            "step_count":   step_count,
+            "prev_dist":    prev_dist,
+            "prev_action":  prev_action,
+            # Humanoid-specific carry state
+            "human_pos":    human_init_pos,                           # (B, 2)
+            "human_wp_idx": jnp.zeros(self.n_envs, dtype=jnp.int32), # (B,)
+            "human_t":      jnp.zeros(self.n_envs, dtype=jnp.float32),# (B,)
         }
         obs = self._get_obs(state)
         return state, obs
@@ -220,10 +240,54 @@ class SpotMJXEnv:
             dx = dx.replace(ctrl=ctrl)
             dx = self._batch_step(dx)
 
-        # ── Update mocap (dynamic obstacles move each step) ───────────
-        # Simple random-walk for dynamic obstacles (last 5 mocap bodies)
-        # In a real run you'd use a proper velocity model
-        mocap_pos = mocap_pos  # static for now; dynamic logic in env.update_dynobs()
+        # ── Update humanoid obstacle (patrol near goal) ───────────────
+        if HUMANOID_CFG["enabled"]:
+            human_pos = state["human_pos"]      # (B, 2)
+            human_wp  = state["human_wp_idx"]   # (B,)  int32
+            human_t   = state["human_t"]        # (B,)  float32
+
+            step_dt = float(PHYSICS_SUBSTEPS) * float(self._mj_model.opt.timestep)
+            patrol_r = float(HUMANOID_CFG["patrol_radius"])
+
+            # Recompute patrol waypoints from the (possibly new) goal pos
+            wp0 = jnp.stack([
+                jnp.clip(goal_pos[:, 0] + patrol_r, -ROOM_HALF, ROOM_HALF),
+                jnp.clip(goal_pos[:, 1],             -ROOM_HALF, ROOM_HALF),
+            ], axis=-1)                                               # (B, 2)
+            wp1 = jnp.stack([
+                jnp.clip(goal_pos[:, 0] - patrol_r, -ROOM_HALF, ROOM_HALF),
+                jnp.clip(goal_pos[:, 1],             -ROOM_HALF, ROOM_HALF),
+            ], axis=-1)                                               # (B, 2)
+            waypoints = jnp.stack([wp0, wp1], axis=1)                # (B, 2, 2)
+
+            # Select the current target waypoint per env
+            env_idx = jnp.arange(self.n_envs)
+            target  = waypoints[env_idx, human_wp]                   # (B, 2)
+
+            # Move toward target
+            diff    = target - human_pos                              # (B, 2)
+            dist_h  = jnp.linalg.norm(diff, axis=-1, keepdims=True)  # (B, 1)
+            dir_h   = diff / (dist_h + 1e-8)
+            new_human_pos = jnp.clip(
+                human_pos + dir_h * float(HUMANOID_CFG["speed"]) * step_dt,
+                -ROOM_HALF, ROOM_HALF,
+            )
+
+            # Toggle waypoint when close enough
+            switch_dist = float(HUMANOID_CFG["wp_switch_dist"])
+            new_human_wp = jnp.where(dist_h[:, 0] < switch_dist,
+                                     1 - human_wp, human_wp)
+            new_human_t  = human_t + step_dt
+
+            # Write updated humanoid position into mocap_pos
+            mocap_pos = (mocap_pos
+                         .at[:, HUMANOID_MOCAP_IDX, 0].set(new_human_pos[:, 0])
+                         .at[:, HUMANOID_MOCAP_IDX, 1].set(new_human_pos[:, 1])
+                         .at[:, HUMANOID_MOCAP_IDX, 2].set(HUMANOID_CFG["mocap_z"]))
+        else:
+            new_human_pos = state["human_pos"]
+            new_human_wp  = state["human_wp_idx"]
+            new_human_t   = state["human_t"]
 
         # ── Extract robot state ───────────────────────────────────────
         robot_pos  = dx.qpos[:, 0:3]          # (B, 3)
@@ -261,12 +325,15 @@ class SpotMJXEnv:
         )
 
         new_state = {
-            "dx":          dx,
-            "mocap_pos":   mocap_pos,
-            "goal_pos":    goal_pos,
-            "step_count":  new_step,
-            "prev_dist":   new_dist,
-            "prev_action": ctrl,
+            "dx":           dx,
+            "mocap_pos":    mocap_pos,
+            "goal_pos":     goal_pos,
+            "step_count":   new_step,
+            "prev_dist":    new_dist,
+            "prev_action":  ctrl,
+            "human_pos":    new_human_pos,
+            "human_wp_idx": new_human_wp,
+            "human_t":      new_human_t,
         }
         obs  = self._get_obs(new_state)
         info = r_info
@@ -350,6 +417,19 @@ class SpotMJXEnv:
         new_count = jnp.where(terminated, reset_state["step_count"], state["step_count"])
         new_pdist = jnp.where(terminated, reset_state["prev_dist"],  state["prev_dist"])
 
-        state = {**state, "goal_pos": new_goal,
-                 "step_count": new_count, "prev_dist": new_pdist}
+        # Merge humanoid state for reset envs
+        new_hpos = jnp.where(terminated[:, None],
+                              reset_state["human_pos"],    state["human_pos"])
+        new_hwp  = jnp.where(terminated,
+                              reset_state["human_wp_idx"], state["human_wp_idx"])
+        new_ht   = jnp.where(terminated,
+                              reset_state["human_t"],      state["human_t"])
+
+        state = {**state,
+                 "goal_pos":     new_goal,
+                 "step_count":   new_count,
+                 "prev_dist":    new_pdist,
+                 "human_pos":    new_hpos,
+                 "human_wp_idx": new_hwp,
+                 "human_t":      new_ht}
         return state, obs

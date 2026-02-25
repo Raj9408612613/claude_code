@@ -14,8 +14,9 @@ JAX ↔ Warp bridge uses DLPack (zero-copy when both are on the same CUDA device
 Scene primitives:
   - Floor plane (y=0 up convention)
   - 4 walls (axis-aligned boxes)
-  - 25 obstacle boxes   → positions read from data.mocap_pos each step
-  - 5  dynamic cylinders → same
+  - 25 obstacle boxes      → positions read from data.mocap_pos each step
+  - 5  dynamic cylinders  → same
+  - 1  humanoid body      → placed near randomised goal at reset; patrols each step
 
 Depth noise (Gaussian + dropout) is applied inside a second Warp kernel.
 """
@@ -42,9 +43,10 @@ MIN_D    = 0.1
 MAX_D    = 10.0
 
 # Number of obstacle mocap bodies in the XML
-N_STATIC  = 25
-N_DYNAMIC = 5
-N_OBS     = N_STATIC + N_DYNAMIC   # total mocap bodies
+N_STATIC   = 25
+N_DYNAMIC  = 5
+N_HUMANOID = 1   # one capsule-based humanoid mocap body (human_0)
+N_OBS      = N_STATIC + N_DYNAMIC + N_HUMANOID   # total mocap bodies = 31
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -248,6 +250,9 @@ _OBS_HALF_SIZES = np.array([
     # dynamic (cylinders approximated as boxes)
     [0.25,0.25,0.85],[0.25,0.25,0.85],[0.25,0.25,0.85],
     [0.25,0.25,0.85],[0.25,0.25,0.85],
+    # humanoid (human_0) — AABB centred at torso mocap origin (z=1.0)
+    # covers x: ±0.30, y: ±0.30, z: ±1.00  →  world z: 0.0 – 2.0
+    [0.30,0.30,1.00],
 ], dtype=np.float32)
 
 
