@@ -131,7 +131,7 @@ class SpotMJXEnv:
         # Build batch of initial MJX data
         mj_data = mujoco.MjData(self._mj_model)
         dx_single = mjx.put_data(self._mj_model, mj_data)
-        dx_batch  = jax.tree_map(
+        dx_batch  = jax.tree_util.tree_map(
             lambda x: jnp.broadcast_to(x, (self.n_envs,) + x.shape),
             dx_single,
         )

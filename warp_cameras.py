@@ -313,14 +313,26 @@ class WarpDepthRenderer:
     # ------------------------------------------------------------------ #
     def _jax_to_wp_vec3(self, jax_arr) -> wp.array:
         """Zero-copy JAX float32 (N,3) → Warp vec3 array via DLPack."""
-        capsule = jax.dlpack.to_dlpack(jax_arr.astype(jnp.float32))
-        t = wp.from_dlpack(capsule)
+        arr = jax_arr.astype(jnp.float32)
+        # JAX >=0.7 removed jax.dlpack.to_dlpack; Warp can consume JAX arrays
+        # directly via the __dlpack__ protocol.
+        try:
+            t = wp.from_dlpack(arr)
+        except TypeError:
+            if not hasattr(jax.dlpack, "to_dlpack"):
+                raise
+            t = wp.from_dlpack(jax.dlpack.to_dlpack(arr))
         return t.view(wp.vec3)
 
     def _jax_to_wp_mat33(self, jax_arr) -> wp.array:
         """Zero-copy JAX float32 (N,9) → Warp mat33 array."""
-        capsule = jax.dlpack.to_dlpack(jax_arr.astype(jnp.float32))
-        t = wp.from_dlpack(capsule)
+        arr = jax_arr.astype(jnp.float32)
+        try:
+            t = wp.from_dlpack(arr)
+        except TypeError:
+            if not hasattr(jax.dlpack, "to_dlpack"):
+                raise
+            t = wp.from_dlpack(jax.dlpack.to_dlpack(arr))
         return t.view(wp.mat33)
 
     # ------------------------------------------------------------------ #
@@ -383,6 +395,8 @@ class WarpDepthRenderer:
         self._step += 1
 
         # ── Back to JAX via DLPack ─────────────────────────────────────
-        capsule = wp.to_dlpack(out_buf)
-        depth_jax = jax.dlpack.from_dlpack(capsule)
+        try:
+            depth_jax = jax.dlpack.from_dlpack(out_buf)
+        except TypeError:
+            depth_jax = jax.dlpack.from_dlpack(wp.to_dlpack(out_buf))
         return depth_jax.reshape(ne, N_CAMS, CAM_H, CAM_W)

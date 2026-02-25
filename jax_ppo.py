@@ -200,7 +200,7 @@ def ppo_update(
 
     grads, info = jax.grad(loss_fn, has_aux=True)(train_state.params)
     # Clip gradients
-    grads = jax.tree_map(
+    grads = jax.tree_util.tree_map(
         lambda g: jnp.clip(g, -MAX_GRAD, MAX_GRAD), grads
     )
     train_state = train_state.apply_gradients(grads=grads)
