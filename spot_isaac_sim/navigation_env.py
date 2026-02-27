@@ -263,6 +263,7 @@ class SpotNavigationEnv(gym.Env):
             observation, reward, terminated, truncated, info
         """
         action = np.clip(action, -1.0, 1.0).astype(np.float32)
+        action = np.where(np.isfinite(action), action, 0.0)  # NaN/inf guard
 
         # ── Scale action to joint limits ──
         target_joints = (
@@ -292,6 +293,15 @@ class SpotNavigationEnv(gym.Env):
         min_obs_dist, has_collision = self._compute_obstacle_distances(
             robot_pos[:2]
         )
+
+        # ── Guard: terminate immediately if state has blown up ──
+        if not self._is_healthy(robot_pos, robot_quat, joint_pos, joint_vel):
+            observation = self._get_observation()
+            self.current_step += 1
+            self._total_timesteps += 1
+            info = self._get_info()
+            info["terminated_reason"] = "unhealthy_state"
+            return observation, -10.0, True, False, info
 
         # ── Compute reward ──
         reward, reward_info = self.reward_computer.compute(
@@ -372,6 +382,9 @@ class SpotNavigationEnv(gym.Env):
             goal_dir,               # 2
             [goal_dist],            # 1
         ]).astype(np.float32)       # Total: 37
+
+        # Sanitize: replace any NaN/inf with 0 so the network never sees garbage
+        proprio = np.where(np.isfinite(proprio), proprio, 0.0)
 
         return {
             "depth": depth,
@@ -466,6 +479,23 @@ class SpotNavigationEnv(gym.Env):
             min_dist = 10.0  # No obstacles
 
         return min_dist, has_collision
+
+    def _is_healthy(self, robot_pos, robot_quat, joint_pos, joint_vel):
+        """
+        Return False if the robot state has blown up (NaN/inf or extreme values).
+        Catches physics simulation explosions before they corrupt training.
+        """
+        # Height must be in a physically plausible range
+        height = robot_pos[2]
+        if not (self.term_cfg["min_height"] < height < 2.0):
+            return False
+
+        # All state arrays must be finite (no NaN or inf from physics)
+        for arr in (robot_pos, robot_quat, joint_pos, joint_vel):
+            if not np.all(np.isfinite(arr)):
+                return False
+
+        return True
 
     def _check_termination(self, robot_pos, robot_quat, goal_reached):
         """Check if episode should terminate."""

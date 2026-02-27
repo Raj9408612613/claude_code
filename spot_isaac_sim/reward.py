@@ -130,6 +130,12 @@ class RewardComputer:
         # ── 10. Alive bonus ──
         alive_bonus = self.cfg["alive_bonus"]
 
+        # ── Sanitize individual components before summing ──
+        # Prevents one exploding term (e.g. huge joint vel) from corrupting all gradients
+        progress_reward = float(np.clip(progress_reward, -5.0, 5.0))
+        energy_penalty = float(np.clip(energy_penalty, -2.0, 0.0))
+        smoothness_penalty = float(np.clip(smoothness_penalty, -2.0, 0.0))
+
         # ── Total ──
         total_reward = (
             progress_reward
@@ -143,6 +149,12 @@ class RewardComputer:
             + heading_reward
             + alive_bonus
         )
+
+        # ── Guard: replace NaN/inf with 0 and clip to finite range ──
+        # Upper bound 210 preserves the 200-point goal bonus
+        if not np.isfinite(total_reward):
+            total_reward = 0.0
+        total_reward = float(np.clip(total_reward, -20.0, 210.0))
 
         info = {
             "reward_progress": progress_reward,
