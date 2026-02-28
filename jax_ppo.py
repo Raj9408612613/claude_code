@@ -87,25 +87,55 @@ class SpotActorCritic(nn.Module):
 
     @nn.compact
     def __call__(self, depth, proprio):
-        cnn_feat = DepthCNNEncoder()(depth)     # (B, 256)
-        pro_feat = PropriEncoder()(proprio)     # (B, 64)
+        # Explicit names let each sub-module's params be addressed directly
+        # (e.g. params["cnn"]), enabling CNN-feature caching during rollout.
+        cnn_feat = DepthCNNEncoder(name="cnn")(depth)       # (B, 256)
+        pro_feat = PropriEncoder(name="proprio")(proprio)   # (B, 64)
         x = jnp.concatenate([cnn_feat, pro_feat], axis=-1)  # (B, 320)
 
         # Shared trunk
-        x = nn.Dense(256)(x); x = nn.elu(x)
-        x = nn.Dense(128)(x); x = nn.elu(x)
+        x = nn.Dense(256, name="trunk0")(x); x = nn.elu(x)
+        x = nn.Dense(128, name="trunk1")(x); x = nn.elu(x)
 
         # Actor head
-        action_mean    = nn.Dense(ACTION_DIM)(x)
-        log_std        = self.param("log_std",
+        action_mean   = nn.Dense(ACTION_DIM, name="actor")(x)
+        log_std       = self.param("log_std",
                                    nn.initializers.zeros, (ACTION_DIM,))
-        log_std_clamp  = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
+        log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
 
         # Critic head
-        value = nn.Dense(64)(x); value = nn.elu(value)
-        value = nn.Dense(1)(value)
+        value = nn.Dense(64, name="critic0")(x); value = nn.elu(value)
+        value = nn.Dense(1,  name="critic1")(value)
 
         return action_mean, log_std_clamp, value.squeeze(-1)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# CNN FEATURE CACHING HELPERS
+# ════════════════════════════════════════════════════════════════════════════
+
+@jax.jit
+def _encode_depth(params, depth):
+    """Run only the CNN encoder — JIT-compiled for fast rollout inference."""
+    return DepthCNNEncoder().apply({"params": params["cnn"]}, depth)
+
+
+def _head_forward(params, cnn_feat, proprio):
+    """
+    Forward pass from pre-encoded CNN features, skipping DepthCNNEncoder.
+    Plain function (not @jax.jit) so gradients flow through it inside
+    ppo_update's loss_fn.
+    """
+    pro_feat = PropriEncoder().apply({"params": params["proprio"]}, proprio)
+    x = jnp.concatenate([cnn_feat, pro_feat], axis=-1)
+    x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
+    x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
+    action_mean   = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
+    log_std       = params["log_std"]
+    log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
+    value = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
+    value = nn.Dense(1).apply( {"params": params["critic1"]}, value)
+    return action_mean, log_std_clamp, value.squeeze(-1)
 
 
 def _gaussian_log_prob(mean, log_std, action):
@@ -125,7 +155,7 @@ def _gaussian_entropy(log_std):
 # ════════════════════════════════════════════════════════════════════════════
 
 class RolloutBatch(NamedTuple):
-    depth:       jnp.ndarray   # (T*B, 5, 120, 160)
+    cnn_feat:    jnp.ndarray   # (T*B, CNN_FEAT_DIM=256)  pre-encoded depth features
     proprio:     jnp.ndarray   # (T*B, 37)
     action:      jnp.ndarray   # (T*B, 12)
     log_prob:    jnp.ndarray   # (T*B,)
@@ -169,11 +199,9 @@ def ppo_update(
     """One gradient update on a minibatch."""
 
     def loss_fn(params):
-        mean, log_std, value = train_state.apply_fn(
-            {"params": params},
-            batch.depth / 10.0,    # normalize depth to [0, 1]
-            batch.proprio,
-        )
+        # Uses pre-encoded CNN features — CNN params get no PPO gradients
+        # (they only update between rollouts via _encode_depth with new params).
+        mean, log_std, value = _head_forward(params, batch.cnn_feat, batch.proprio)
 
         # Policy loss
         log_prob_new = _gaussian_log_prob(mean, log_std, batch.action)
@@ -251,14 +279,18 @@ class PPOTrainer:
 
     # ──────────────────────────────────────────────────────────────────
     def _sample_action(self, obs, deterministic=False):
-        """Sample action from current policy. Returns (action, log_prob, value)."""
-        mean, log_std, value = self.net.apply(
-            {"params": self.train_state.params},
-            obs["depth"] / 10.0,
-            obs["proprio"],
+        """
+        Encode depth → CNN features, then sample action.
+        Returns (action, log_prob, value, cnn_feat).
+        cnn_feat is stored in the rollout buffer instead of raw depth images,
+        reducing buffer size from ~374 GB to ~1 GB.
+        """
+        cnn_feat = _encode_depth(self.train_state.params, obs["depth"] / 10.0)
+        mean, log_std, value = _head_forward(
+            self.train_state.params, cnn_feat, obs["proprio"]
         )
         if deterministic:
-            return mean, None, value
+            return mean, None, value, cnn_feat
 
         self.rng, k = jax.random.split(self.rng)
         std    = jnp.exp(log_std)
@@ -266,15 +298,18 @@ class PPOTrainer:
         action = mean + std * noise
         action = jnp.clip(action, -1.0, 1.0)
         log_p  = _gaussian_log_prob(mean, log_std, action)
-        return action, log_p, value
+        return action, log_p, value, cnn_feat
 
     # ──────────────────────────────────────────────────────────────────
     def collect_rollout(self, env, state, obs):
         """
         Collect n_steps of experience. Returns updated state/obs, batch, and
         rollout stats dict (mean/min/max reward, done rate, episode count).
+
+        Stores CNN features (T*B, 256) instead of raw depth (T*B, 5, 120, 160)
+        to keep the rollout buffer at ~1 GB instead of ~374 GB.
         """
-        buf_depth    = []
+        buf_cnn_feat = []
         buf_proprio  = []
         buf_actions  = []
         buf_log_prob = []
@@ -285,9 +320,9 @@ class PPOTrainer:
         ep_done_count = 0
 
         for _ in range(self.n_steps):
-            action, log_prob, value = self._sample_action(obs)
+            action, log_prob, value, cnn_feat = self._sample_action(obs)
 
-            buf_depth.append(obs["depth"])
+            buf_cnn_feat.append(cnn_feat)            # (B, 256) — not raw depth
             buf_proprio.append(obs["proprio"])
             buf_actions.append(action)
             buf_log_prob.append(log_prob)
@@ -304,7 +339,7 @@ class PPOTrainer:
             state, obs = env.auto_reset(state, obs, done, k)
 
         # Bootstrap value for last step
-        _, _, last_value = self._sample_action(obs)
+        _, _, last_value, _ = self._sample_action(obs)
 
         # Stack: (T, B, ...)
         rewards = jnp.stack(buf_rewards)     # (T, B)
@@ -320,7 +355,7 @@ class PPOTrainer:
             return x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x.reshape(-1)
 
         batch = RolloutBatch(
-            depth      = flat(jnp.stack(buf_depth)),
+            cnn_feat   = flat(jnp.stack(buf_cnn_feat)),  # (T*B, 256)
             proprio    = flat(jnp.stack(buf_proprio)),
             action     = flat(jnp.stack(buf_actions)),
             log_prob   = flat(jnp.stack(buf_log_prob)),
@@ -328,21 +363,19 @@ class PPOTrainer:
             ret        = flat(returns),
         )
 
-        total_transitions = self.n_steps * env.n_envs
         rollout_stats = {
             "rew_mean":   float(rewards.mean()),
             "rew_min":    float(rewards.min()),
             "rew_max":    float(rewards.max()),
-            "done_rate":  float(dones.mean()),          # fraction of steps that ended an ep
-            "ep_count":   ep_done_count,                # total episodes finished this rollout
+            "done_rate":  float(dones.mean()),
+            "ep_count":   ep_done_count,
         }
         return state, obs, batch, rollout_stats
 
     # ──────────────────────────────────────────────────────────────────
     def update(self, batch: RolloutBatch) -> Dict:
         """Run N_EPOCHS of PPO updates on the collected batch."""
-        all_info = {}
-        total_samples = batch.depth.shape[0]
+        total_samples = batch.cnn_feat.shape[0]
 
         for epoch in range(N_EPOCHS):
             self.rng, k = jax.random.split(self.rng)
@@ -351,7 +384,7 @@ class PPOTrainer:
             for start in range(0, total_samples, MINIBATCH_SZ):
                 idx = perm[start : start + MINIBATCH_SZ]
                 mb  = RolloutBatch(
-                    depth      = batch.depth[idx],
+                    cnn_feat   = batch.cnn_feat[idx],
                     proprio    = batch.proprio[idx],
                     action     = batch.action[idx],
                     log_prob   = batch.log_prob[idx],
