@@ -270,7 +270,10 @@ class PPOTrainer:
 
     # ──────────────────────────────────────────────────────────────────
     def collect_rollout(self, env, state, obs):
-        """Collect n_steps of experience. Returns updated state/obs and batch."""
+        """
+        Collect n_steps of experience. Returns updated state/obs, batch, and
+        rollout stats dict (mean/min/max reward, done rate, episode count).
+        """
         buf_depth    = []
         buf_proprio  = []
         buf_actions  = []
@@ -278,6 +281,8 @@ class PPOTrainer:
         buf_rewards  = []
         buf_dones    = []
         buf_values   = []
+
+        ep_done_count = 0
 
         for _ in range(self.n_steps):
             action, log_prob, value = self._sample_action(obs)
@@ -292,6 +297,11 @@ class PPOTrainer:
 
             buf_rewards.append(reward)
             buf_dones.append(done.astype(jnp.float32))
+            ep_done_count += int(jnp.sum(done))
+
+            # Auto-reset: immediately replace terminated envs with fresh ones
+            self.rng, k = jax.random.split(self.rng)
+            state, obs = env.auto_reset(state, obs, done, k)
 
         # Bootstrap value for last step
         _, _, last_value = self._sample_action(obs)
@@ -317,7 +327,16 @@ class PPOTrainer:
             advantage  = flat(advantages),
             ret        = flat(returns),
         )
-        return state, obs, batch
+
+        total_transitions = self.n_steps * env.n_envs
+        rollout_stats = {
+            "rew_mean":   float(rewards.mean()),
+            "rew_min":    float(rewards.min()),
+            "rew_max":    float(rewards.max()),
+            "done_rate":  float(dones.mean()),          # fraction of steps that ended an ep
+            "ep_count":   ep_done_count,                # total episodes finished this rollout
+        }
+        return state, obs, batch, rollout_stats
 
     # ──────────────────────────────────────────────────────────────────
     def update(self, batch: RolloutBatch) -> Dict:

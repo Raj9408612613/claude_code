@@ -326,7 +326,7 @@ class WarpDepthRenderer:
 
     def _jax_to_wp_mat33(self, jax_arr) -> wp.array:
         """Zero-copy JAX float32 (N,9) → Warp mat33 array."""
-        arr = jax_arr.astype(jnp.float32)
+        arr = jax_arr.astype(jnp.float32).reshape(-1, 3, 3)  # mat33 needs (N,3,3) not (N,9)
         try:
             t = wp.from_dlpack(arr)
         except TypeError:
