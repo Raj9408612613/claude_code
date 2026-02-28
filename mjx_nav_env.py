@@ -33,6 +33,19 @@ from warp_cameras import WarpDepthRenderer, N_CAMS, CAM_H, CAM_W, N_OBS, N_STATI
 from jax_reward import compute_reward, check_termination
 from config import HUMANOID_OBSTACLE as HUMANOID_CFG
 
+# ── Health check (JIT-compatible) ────────────────────────────────────────────
+@jax.jit
+def is_healthy(qpos: jnp.ndarray, proprio: jnp.ndarray) -> jnp.ndarray:
+    """
+    Returns (B,) bool — True when the env is in a valid state.
+    Catches physics explosions (NaN/inf or out-of-range height) before they
+    corrupt gradients.
+    """
+    height    = qpos[:, 2]                              # z position  (B,)
+    height_ok = (height > 0.2) & (height < 2.0)
+    obs_ok    = jnp.all(jnp.isfinite(proprio), axis=-1) # (B,)
+    return height_ok & obs_ok
+
 # ── Joint limits (from config.py SPOT_ROBOT) ─────────────────────────────────
 JOINT_LOWER = jnp.array([-0.8,-0.6,-2.8]*4, dtype=jnp.float32)
 JOINT_UPPER = jnp.array([ 0.8, 2.4,-0.5]*4, dtype=jnp.float32)
@@ -228,6 +241,10 @@ class SpotMJXEnv:
         mocap_pos = state["mocap_pos"]
         goal_pos  = state["goal_pos"]
 
+        # ── Guard: sanitize actions before physics ────────────────────
+        action = jnp.clip(action, -1.0, 1.0)
+        action = jnp.where(jnp.isfinite(action), action, 0.0)
+
         # Denormalize actions to joint position targets
         joint_mid   = (JOINT_UPPER + JOINT_LOWER) / 2.0
         joint_range = (JOINT_UPPER - JOINT_LOWER) / 2.0
@@ -336,6 +353,10 @@ class SpotMJXEnv:
             "human_t":      new_human_t,
         }
         obs  = self._get_obs(new_state)
+
+        # Guard: also terminate any env whose state has blown up (NaN/inf)
+        terminated = terminated | ~is_healthy(dx.qpos, obs["proprio"])
+
         info = r_info
         return new_state, obs, reward, terminated, info
 
@@ -379,6 +400,9 @@ class SpotMJXEnv:
             goal_dir,     # 2
             goal_dist,    # 1
         ], axis=-1)        # 37-dim
+
+        # Sanitize: replace any NaN/inf with 0 so the network never sees garbage
+        proprio = jnp.where(jnp.isfinite(proprio), proprio, 0.0)
 
         return {"depth": depth, "proprio": proprio}
 

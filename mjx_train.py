@@ -20,6 +20,7 @@ Expected throughput (vs original Isaac Sim ~17ms/env/step on 1 vCPU):
 """
 
 import os
+import sys
 import time
 import argparse
 import jax
@@ -97,43 +98,49 @@ def main():
     update          = 0
     t_start         = time.time()
 
-    print(f"Starting training — {n_updates} updates × {args.n_envs * args.n_steps:,} steps/update")
+    steps_per_update = args.n_envs * args.n_steps
+    print(f"Starting training — {n_updates} updates × {steps_per_update:,} steps/update")
+    print(f"{'─'*100}")
+    print(f"{'update':>8}  {'steps':>12}  {'fps':>7}  "
+          f"{'rew_mean':>9}  {'rew_min':>8}  {'rew_max':>8}  "
+          f"{'done%':>6}  {'ep_cnt':>6}  "
+          f"{'p_loss':>8}  {'v_loss':>8}  {'entropy':>8}")
+    print(f"{'─'*100}")
 
     for update in range(1, n_updates + 1):
-        t0 = time.time()
 
-        # Collect rollout
-        state, obs, batch = trainer.collect_rollout(env, state, obs)
+        # ── Collect rollout (auto-reset is handled inside) ────────────
+        state, obs, batch, rstats = trainer.collect_rollout(env, state, obs)
 
-        # PPO update
-        info = trainer.update(batch)
+        # ── PPO update ────────────────────────────────────────────────
+        ppo_info = trainer.update(batch)
 
-        total_env_steps += args.n_envs * args.n_steps
+        total_env_steps += steps_per_update
         elapsed = time.time() - t_start
         fps     = total_env_steps / elapsed
 
-        # ── Logging ───────────────────────────────────────────────────
+        # ── Real-time logging (every update) ──────────────────────────
         if update % args.log_interval == 0:
             print(
-                f"[update {update:4d}/{n_updates}]  "
-                f"steps={total_env_steps:9,}  "
-                f"fps={fps:7,.0f}  "
-                f"policy_loss={float(info['policy_loss']):.4f}  "
-                f"value_loss={float(info['value_loss']):.4f}  "
-                f"entropy={float(info['entropy']):.4f}"
+                f"{update:>8d}  "
+                f"{total_env_steps:>12,}  "
+                f"{fps:>7,.0f}  "
+                f"{rstats['rew_mean']:>+9.3f}  "
+                f"{rstats['rew_min']:>+8.2f}  "
+                f"{rstats['rew_max']:>+8.2f}  "
+                f"{rstats['done_rate']*100:>5.1f}%  "
+                f"{rstats['ep_count']:>6d}  "
+                f"{float(ppo_info['policy_loss']):>8.4f}  "
+                f"{float(ppo_info['value_loss']):>8.4f}  "
+                f"{float(ppo_info['entropy']):>8.4f}",
+                flush=True,
             )
 
         # ── Checkpointing ─────────────────────────────────────────────
         if update % args.save_interval == 0:
             ckpt_path = os.path.join(args.save_dir, f"step_{total_env_steps}.pkl")
             trainer.save(ckpt_path)
-            print(f"  Saved checkpoint: {ckpt_path}")
-
-        # ── Auto-reset terminated envs ─────────────────────────────────
-        # (full reset on all envs every n_steps — simpler than per-env reset)
-        if update % 10 == 0:
-            rng, k = jax.random.split(rng)
-            state, obs = env.reset(k)
+            print(f"  [ckpt] saved → {ckpt_path}", flush=True)
 
     # ── Final save ────────────────────────────────────────────────────
     final_path = os.path.join(args.save_dir, "final_model.pkl")

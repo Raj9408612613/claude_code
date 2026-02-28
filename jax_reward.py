@@ -100,10 +100,21 @@ def compute_reward(
     heading_dot = jnp.sum(fwd_norm * goal_dir_norm, axis=-1)
     r_heading = heading_dot * HEADING_W
 
+    # ── Sanitize individual components before summing ─────────────────
+    # Prevents one exploding term (e.g. huge joint vel) from corrupting gradients
+    r_progress = jnp.clip(r_progress, -5.0, 5.0)
+    r_energy   = jnp.clip(r_energy,   -2.0, 0.0)
+    r_smooth   = jnp.clip(r_smooth,   -2.0, 0.0)
+
     # ── Total ─────────────────────────────────────────────────────────
     total = (r_progress + r_goal + r_collision + r_near
              + r_upright + r_height + r_energy + r_smooth
              + r_alive + r_heading)
+
+    # ── Guard: replace NaN/inf with 0 and clip to finite range ────────
+    # Upper bound 210 preserves the 200-point goal bonus
+    total = jnp.where(jnp.isfinite(total), total, 0.0)
+    total = jnp.clip(total, -20.0, 210.0)
 
     info = {
         "r_progress":  r_progress,
