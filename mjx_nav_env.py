@@ -130,13 +130,16 @@ class SpotMJXEnv:
     # RESET
     # ════════════════════════════════════════════════════════════════════
 
-    def reset(self, rng: jax.Array) -> Tuple[Dict, Dict]:
+    def reset(self, rng: jax.Array, compute_obs: bool = True) -> Tuple[Dict, Dict]:
         """
         Reset all n_envs environments with random positions/goals/obstacles.
 
+        Args:
+            compute_obs: if False, skip Warp depth rendering and return obs=None.
+                         Used by auto_reset to avoid double-rendering.
         Returns:
             state: dict of env state (JAX arrays)
-            obs:   dict{"depth": ..., "proprio": ...}
+            obs:   dict{"depth": ..., "proprio": ...} or None
         """
         rng, *sub = jax.random.split(rng, self.n_envs + 1)
         sub = jnp.stack(sub)   # (n_envs, 2)
@@ -219,7 +222,7 @@ class SpotMJXEnv:
             "human_wp_idx": jnp.zeros(self.n_envs, dtype=jnp.int32), # (B,)
             "human_t":      jnp.zeros(self.n_envs, dtype=jnp.float32),# (B,)
         }
-        obs = self._get_obs(state)
+        obs = self._get_obs(state) if compute_obs else None
         return state, obs
 
     # ════════════════════════════════════════════════════════════════════
@@ -426,12 +429,14 @@ class SpotMJXEnv:
         Merges ALL state fields — including the MJX physics state (dx) —
         so that terminated envs get a clean physics state and don't keep
         feeding corrupted qpos/qvel back into _batch_step.
-        """
-        if not jnp.any(terminated):
-            return state, obs
 
+        Skips Warp depth rendering (compute_obs=False) to avoid double-
+        rendering every step.  Reset envs carry stale obs for one step;
+        the next env.step() → _get_obs() overwrites with fresh obs.
+        No GPU→CPU sync — all ops are pure JAX.
+        """
         rng_new, _ = jax.random.split(rng)
-        reset_state, reset_obs = self.reset(rng_new)
+        reset_state, _ = self.reset(rng_new, compute_obs=False)
 
         # ── Broadcast helper: (B,) mask → shape matching any leaf ────
         def _pick(fresh, live):
@@ -470,7 +475,6 @@ class SpotMJXEnv:
             "human_t":      new_ht,
         }
 
-        # ── Merge observations (reset envs get fresh obs) ────────────
-        new_obs = jax.tree_util.tree_map(_pick, reset_obs, obs)
-
-        return new_state, new_obs
+        # obs NOT merged — stale for terminated envs, but the next
+        # env.step() → _get_obs() will overwrite with fresh obs.
+        return new_state, obs
