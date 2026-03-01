@@ -421,39 +421,56 @@ class SpotMJXEnv:
     def auto_reset(
         self, state: Dict, obs: Dict, terminated: jnp.ndarray, rng: jax.Array
     ) -> Tuple[Dict, Dict]:
-        """Reset only the envs where terminated=True."""
+        """Reset only the envs where terminated=True.
+
+        Merges ALL state fields — including the MJX physics state (dx) —
+        so that terminated envs get a clean physics state and don't keep
+        feeding corrupted qpos/qvel back into _batch_step.
+        """
         if not jnp.any(terminated):
             return state, obs
 
         rng_new, _ = jax.random.split(rng)
         reset_state, reset_obs = self.reset(rng_new)
 
-        def _merge(live, dead):
-            # Select live or dead based on terminated flag
-            mask = terminated[:, None] if live.ndim > 1 else terminated
-            return jnp.where(mask, dead, live) if live.ndim > 1 else \
-                   jnp.where(terminated, dead, live)
+        # ── Broadcast helper: (B,) mask → shape matching any leaf ────
+        def _pick(fresh, live):
+            """Select fresh where terminated=True, live otherwise."""
+            if not hasattr(live, 'shape') or live.ndim == 0:
+                return live                          # non-array / unbatched scalar
+            shape = (terminated.shape[0],) + (1,) * (live.ndim - 1)
+            return jnp.where(terminated.reshape(shape), fresh, live)
 
-        # Merge (can't do tree_map cleanly for dx because it's nested)
-        # For simplicity, merge only the scalars / goal — dx merge is complex
-        # Production: use jax.lax.cond per-env or full reset batch
-        new_goal  = jnp.where(terminated[:, None], reset_state["goal_pos"], state["goal_pos"])
-        new_count = jnp.where(terminated, reset_state["step_count"], state["step_count"])
-        new_pdist = jnp.where(terminated, reset_state["prev_dist"],  state["prev_dist"])
+        # ── Merge MJX physics state (dx) — the critical fix ─────────
+        new_dx = jax.tree_util.tree_map(
+            _pick, reset_state["dx"], state["dx"]
+        )
 
-        # Merge humanoid state for reset envs
-        new_hpos = jnp.where(terminated[:, None],
-                              reset_state["human_pos"],    state["human_pos"])
-        new_hwp  = jnp.where(terminated,
-                              reset_state["human_wp_idx"], state["human_wp_idx"])
-        new_ht   = jnp.where(terminated,
-                              reset_state["human_t"],      state["human_t"])
+        # ── Merge mocap_pos and prev_action (also previously skipped) ─
+        new_mocap  = _pick(reset_state["mocap_pos"],  state["mocap_pos"])
+        new_pact   = _pick(reset_state["prev_action"],state["prev_action"])
 
-        state = {**state,
-                 "goal_pos":     new_goal,
-                 "step_count":   new_count,
-                 "prev_dist":    new_pdist,
-                 "human_pos":    new_hpos,
-                 "human_wp_idx": new_hwp,
-                 "human_t":      new_ht}
-        return state, obs
+        # ── Merge scalar / goal / humanoid state ─────────────────────
+        new_goal  = _pick(reset_state["goal_pos"],     state["goal_pos"])
+        new_count = _pick(reset_state["step_count"],   state["step_count"])
+        new_pdist = _pick(reset_state["prev_dist"],    state["prev_dist"])
+        new_hpos  = _pick(reset_state["human_pos"],    state["human_pos"])
+        new_hwp   = _pick(reset_state["human_wp_idx"], state["human_wp_idx"])
+        new_ht    = _pick(reset_state["human_t"],      state["human_t"])
+
+        new_state = {
+            "dx":           new_dx,
+            "mocap_pos":    new_mocap,
+            "goal_pos":     new_goal,
+            "step_count":   new_count,
+            "prev_dist":    new_pdist,
+            "prev_action":  new_pact,
+            "human_pos":    new_hpos,
+            "human_wp_idx": new_hwp,
+            "human_t":      new_ht,
+        }
+
+        # ── Merge observations (reset envs get fresh obs) ────────────
+        new_obs = jax.tree_util.tree_map(_pick, reset_obs, obs)
+
+        return new_state, new_obs
