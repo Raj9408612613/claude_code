@@ -120,6 +120,32 @@ def _encode_depth(params, depth):
     return DepthCNNEncoder().apply({"params": params["cnn"]}, depth)
 
 
+@jax.jit
+def _inference_step(params, depth, proprio, rng_key):
+    """Full rollout inference in ONE JIT dispatch: encode → forward → sample.
+
+    Combines _encode_depth + _head_forward + Gaussian sampling into a single
+    compiled kernel.  Returns (action, log_prob, value, cnn_feat).
+    """
+    # CNN encoder
+    cnn_feat = DepthCNNEncoder().apply({"params": params["cnn"]}, depth / 10.0)
+    # Trunk + heads (same ops as _head_forward, inlined for JIT)
+    pro_feat = PropriEncoder().apply({"params": params["proprio"]}, proprio)
+    x = jnp.concatenate([cnn_feat, pro_feat], axis=-1)
+    x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
+    x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
+    mean      = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
+    log_std   = jnp.clip(params["log_std"], LOG_STD_MIN, LOG_STD_MAX)
+    value     = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
+    value     = nn.Dense(1).apply({"params": params["critic1"]}, value).squeeze(-1)
+    # Sample
+    std    = jnp.exp(log_std)
+    noise  = jax.random.normal(rng_key, mean.shape)
+    action = jnp.clip(mean + std * noise, -1.0, 1.0)
+    log_p  = _gaussian_log_prob(mean, log_std, action)
+    return action, log_p, value, cnn_feat
+
+
 def _head_forward(params, cnn_feat, proprio):
     """
     Forward pass from pre-encoded CNN features, skipping DepthCNNEncoder.
@@ -278,27 +304,15 @@ class PPOTrainer:
         )
 
     # ──────────────────────────────────────────────────────────────────
-    def _sample_action(self, obs, deterministic=False):
+    def _sample_action(self, obs):
         """
-        Encode depth → CNN features, then sample action.
+        Single JIT dispatch: encode depth → forward → sample.
         Returns (action, log_prob, value, cnn_feat).
-        cnn_feat is stored in the rollout buffer instead of raw depth images,
-        reducing buffer size from ~374 GB to ~1 GB.
         """
-        cnn_feat = _encode_depth(self.train_state.params, obs["depth"] / 10.0)
-        mean, log_std, value = _head_forward(
-            self.train_state.params, cnn_feat, obs["proprio"]
-        )
-        if deterministic:
-            return mean, None, value, cnn_feat
-
         self.rng, k = jax.random.split(self.rng)
-        std    = jnp.exp(log_std)
-        noise  = jax.random.normal(k, mean.shape)
-        action = mean + std * noise
-        action = jnp.clip(action, -1.0, 1.0)
-        log_p  = _gaussian_log_prob(mean, log_std, action)
-        return action, log_p, value, cnn_feat
+        return _inference_step(
+            self.train_state.params, obs["depth"], obs["proprio"], k
+        )
 
     # ──────────────────────────────────────────────────────────────────
     def collect_rollout(self, env, state, obs):
@@ -317,8 +331,6 @@ class PPOTrainer:
         buf_dones    = []
         buf_values   = []
 
-        ep_done_count = 0
-
         for _ in range(self.n_steps):
             action, log_prob, value, cnn_feat = self._sample_action(obs)
 
@@ -332,7 +344,6 @@ class PPOTrainer:
 
             buf_rewards.append(reward)
             buf_dones.append(done.astype(jnp.float32))
-            ep_done_count += int(jnp.sum(done))
 
             # Auto-reset: immediately replace terminated envs with fresh ones
             self.rng, k = jax.random.split(self.rng)
@@ -363,12 +374,13 @@ class PPOTrainer:
             ret        = flat(returns),
         )
 
+        # One device→host sync HERE (after the loop), not inside the loop
         rollout_stats = {
             "rew_mean":   float(rewards.mean()),
             "rew_min":    float(rewards.min()),
             "rew_max":    float(rewards.max()),
             "done_rate":  float(dones.mean()),
-            "ep_count":   ep_done_count,
+            "ep_count":   int(dones.sum()),
         }
         return state, obs, batch, rollout_stats
 
