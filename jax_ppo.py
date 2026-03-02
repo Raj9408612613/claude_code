@@ -103,9 +103,12 @@ class SpotActorCritic(nn.Module):
                                    nn.initializers.zeros, (ACTION_DIM,))
         log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
 
-        # Critic head
+        # Critic head — output layer initialized near-zero so critic starts
+        # outputting small values instead of random large numbers.
         value = nn.Dense(64, name="critic0")(x); value = nn.elu(value)
-        value = nn.Dense(1,  name="critic1")(value)
+        value = nn.Dense(1,  name="critic1",
+                         kernel_init=nn.initializers.orthogonal(0.01),
+                         bias_init=nn.initializers.zeros)(value)
 
         return action_mean, log_std_clamp, value.squeeze(-1)
 
@@ -186,7 +189,8 @@ class RolloutBatch(NamedTuple):
     action:      jnp.ndarray   # (T*B, 12)
     log_prob:    jnp.ndarray   # (T*B,)
     advantage:   jnp.ndarray   # (T*B,)
-    ret:         jnp.ndarray   # (T*B,)  (value target)
+    ret:         jnp.ndarray   # (T*B,)  normalized return (value target)
+    old_value:   jnp.ndarray   # (T*B,)  normalized value at collection time (for clipping)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -242,12 +246,14 @@ def ppo_update(
         pg_loss2     = jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
         policy_loss  = -jnp.mean(jnp.minimum(pg_loss1, pg_loss2))
 
-        # ── Value loss with clipping (standard PPO) ────────────────────
-        # Clip value predictions to prevent huge swings from 200-pt goal bonus
-        value_clipped = batch.ret + jnp.clip(value - batch.ret, -10.0, 10.0)
-        vf_loss1      = (value - batch.ret) ** 2
-        vf_loss2      = (value_clipped - batch.ret) ** 2
-        value_loss    = 0.5 * jnp.mean(jnp.maximum(vf_loss1, vf_loss2))
+        # ── Value loss with correct PPO clipping ───────────────────────
+        # Clip new value relative to OLD value from rollout collection,
+        # not relative to the return target. This is the standard PPO formula.
+        value_clipped = batch.old_value + jnp.clip(value - batch.old_value,
+                                                   -CLIP_EPS, CLIP_EPS)
+        vf_loss1  = (value         - batch.ret) ** 2
+        vf_loss2  = (value_clipped - batch.ret) ** 2
+        value_loss = 0.5 * jnp.mean(jnp.maximum(vf_loss1, vf_loss2))
 
         # ── Entropy bonus ──────────────────────────────────────────────
         entropy = jnp.mean(_gaussian_entropy(log_std))
@@ -379,10 +385,13 @@ class PPOTrainer:
 
         advantages, returns = compute_gae(rewards, values, dones)
 
-        # Normalize returns to prevent huge value targets from goal bonus
+        # Normalize returns and old values with the SAME scale so that
+        # value clipping (old_value ± CLIP_EPS) operates in normalized space.
         ret_mean = returns.mean()
         ret_std  = returns.std() + 1e-8
-        returns_norm = (returns - ret_mean) / ret_std
+        returns_norm   = (returns        - ret_mean) / ret_std
+        old_values_raw = jnp.stack(buf_values)           # (T, B) — collected values
+        old_values_norm = (old_values_raw - ret_mean) / ret_std
 
         # Flatten (T*B, ...)
         def flat(x):
@@ -395,6 +404,7 @@ class PPOTrainer:
             log_prob   = flat(jnp.stack(buf_log_prob)),
             advantage  = flat(advantages),
             ret        = flat(returns_norm),
+            old_value  = flat(old_values_norm),
         )
 
         # One device→host sync HERE (after the loop), not inside the loop
@@ -425,6 +435,7 @@ class PPOTrainer:
                     log_prob   = batch.log_prob[idx],
                     advantage  = batch.advantage[idx],
                     ret        = batch.ret[idx],
+                    old_value  = batch.old_value[idx],
                 )
                 self.train_state, info = ppo_update(self.train_state, mb)
 
