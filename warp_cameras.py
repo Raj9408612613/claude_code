@@ -84,10 +84,12 @@ def raycast_kernel(
     local_dirs: wp.array(dtype=wp.vec3),
     # Scene mesh (static geometry: floor + walls)
     static_mesh: wp.uint64,
-    # Obstacle boxes: positions (N_OBS,) half-sizes (N_OBS,)
+    # Obstacle boxes: positions (n_envs*N_OBS,) half-sizes (N_OBS,)
     obs_pos:  wp.array(dtype=wp.vec3),
     obs_half: wp.array(dtype=wp.vec3),
     n_obs:    int,
+    n_cams:   int,
+    pixels_per_cam: int,
     min_dist: float,
     max_dist: float,
     # Output depth: (n_envs * N_CAMS * H * W,)
@@ -95,9 +97,11 @@ def raycast_kernel(
 ):
     """One thread = one pixel across all envs × cams."""
     tid = wp.tid()
-    total_pixels = CAM_H * CAM_W
-    cam_id  = tid // total_pixels
-    pix_id  = tid %  total_pixels
+    cam_id  = tid // pixels_per_cam
+    pix_id  = tid %  pixels_per_cam
+
+    # Determine which env this pixel belongs to (for per-env obstacles)
+    env_id  = cam_id // n_cams
 
     # World-space ray
     local_d = local_dirs[pix_id]
@@ -119,9 +123,11 @@ def raycast_kernel(
             best_t = t_mesh
 
     # ── 2. Obstacle axis-aligned boxes (slab method) ────────────────────
+    #    obs_pos is flattened (n_envs*N_OBS,); index by env_id*n_obs + i
+    obs_offset = env_id * n_obs
     for i in range(n_obs):
-        bmin = obs_pos[i] - obs_half[i]
-        bmax = obs_pos[i] + obs_half[i]
+        bmin = obs_pos[obs_offset + i] - obs_half[i]
+        bmax = obs_pos[obs_offset + i] + obs_half[i]
 
         t_min = float(-1e30)
         t_max = float( 1e30)
@@ -303,7 +309,7 @@ class WarpDepthRenderer:
         # ── Persistent Warp output buffers ────────────────────────────
         self._cam_pos_buf  = wp.zeros(n_total_cams, dtype=wp.vec3)
         self._cam_R_buf    = wp.zeros(n_total_cams, dtype=wp.mat33)
-        self._obs_pos_buf  = wp.zeros(N_OBS,        dtype=wp.vec3)
+        self._obs_pos_buf  = wp.zeros(n_envs * N_OBS, dtype=wp.vec3)
         self._depth_buf    = wp.zeros(n_total_pix,  dtype=float)
         self._noisy_buf    = wp.zeros(n_total_pix,  dtype=float)
 
@@ -355,12 +361,12 @@ class WarpDepthRenderer:
         cam_pos_wp = self._jax_to_wp_vec3(cam_pos_flat)
         cam_R_wp   = self._jax_to_wp_mat33(cam_R_flat)
 
-        # Use only first env's obstacles (all envs share room geometry;
-        # for full per-env obstacle support, replicate the kernel n_envs times)
-        obs_pos_first = mocap_pos[0]   # (N_OBS, 3)
-        obs_pos_wp = self._jax_to_wp_vec3(obs_pos_first)
+        # Flatten per-env obstacles: (n_envs, N_OBS, 3) → (n_envs*N_OBS, 3)
+        obs_pos_flat = mocap_pos.reshape(ne * N_OBS, 3)
+        obs_pos_wp   = self._jax_to_wp_vec3(obs_pos_flat)
 
-        total_pix = ne * N_CAMS * CAM_H * CAM_W
+        total_pix       = ne * N_CAMS * CAM_H * CAM_W
+        pixels_per_cam  = CAM_H * CAM_W
 
         # ── Raycast kernel ─────────────────────────────────────────────
         wp.launch(
@@ -370,6 +376,7 @@ class WarpDepthRenderer:
                 cam_pos_wp, cam_R_wp, self._local_dirs,
                 self._static_mesh.id,
                 obs_pos_wp, self._obs_half, N_OBS,
+                N_CAMS, pixels_per_cam,
                 float(MIN_D), float(MAX_D),
                 self._depth_buf,
             ],
