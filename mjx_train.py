@@ -126,6 +126,9 @@ class SimpleLogger:
             self.tb_writer.add_scalar("loss/value",   float(update_info["value_loss"]),  step)
             self.tb_writer.add_scalar("loss/entropy", float(update_info["entropy"]),     step)
             self.tb_writer.add_scalar("loss/total",   float(update_info["total_loss"]),  step)
+            if "ratio_mean" in update_info:
+                self.tb_writer.add_scalar("debug/ratio_mean", float(update_info["ratio_mean"]), step)
+                self.tb_writer.add_scalar("debug/ratio_max",  float(update_info["ratio_max"]),  step)
             self.tb_writer.add_scalar("timing/rollout_sec", rollout_sec, step)
             self.tb_writer.add_scalar("timing/update_sec",  update_sec,  step)
             self.tb_writer.flush()

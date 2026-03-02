@@ -37,7 +37,7 @@ VF_COEF      = 0.5
 MAX_GRAD     = 0.5
 LR           = 3e-4
 N_EPOCHS     = 10
-MINIBATCH_SZ = 64
+MINIBATCH_SZ = 512
 CNN_FEAT_DIM = 256
 PROPRIO_DIM  = 37
 ACTION_DIM   = 12
@@ -222,41 +222,57 @@ def ppo_update(
     train_state: TrainState,
     batch:       RolloutBatch,
 ) -> Tuple[TrainState, Dict]:
-    """One gradient update on a minibatch."""
+    """One gradient update on a minibatch with full NaN/explosion safeguards."""
 
     def loss_fn(params):
-        # Uses pre-encoded CNN features — CNN params get no PPO gradients
-        # (they only update between rollouts via _encode_depth with new params).
         mean, log_std, value = _head_forward(params, batch.cnn_feat, batch.proprio)
 
-        # Policy loss
+        # ── Policy loss with ratio clamping ────────────────────────────
         log_prob_new = _gaussian_log_prob(mean, log_std, batch.action)
-        ratio        = jnp.exp(log_prob_new - batch.log_prob)
+        # Clamp log-ratio BEFORE exp to prevent inf: |new - old| ≤ 10
+        log_ratio    = jnp.clip(log_prob_new - batch.log_prob, -10.0, 10.0)
+        ratio        = jnp.exp(log_ratio)
+
         adv_norm     = (batch.advantage - batch.advantage.mean()) / \
                        (batch.advantage.std() + 1e-8)
+        # Clamp normalized advantages to prevent outlier domination
+        adv_norm     = jnp.clip(adv_norm, -10.0, 10.0)
+
         pg_loss1     = ratio * adv_norm
         pg_loss2     = jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
         policy_loss  = -jnp.mean(jnp.minimum(pg_loss1, pg_loss2))
 
-        # Value loss (clipped)
-        value_loss   = jnp.mean((value - batch.ret) ** 2)
+        # ── Value loss with clipping (standard PPO) ────────────────────
+        # Clip value predictions to prevent huge swings from 200-pt goal bonus
+        value_clipped = batch.ret + jnp.clip(value - batch.ret, -10.0, 10.0)
+        vf_loss1      = (value - batch.ret) ** 2
+        vf_loss2      = (value_clipped - batch.ret) ** 2
+        value_loss    = 0.5 * jnp.mean(jnp.maximum(vf_loss1, vf_loss2))
 
-        # Entropy bonus
-        entropy      = jnp.mean(_gaussian_entropy(log_std))
+        # ── Entropy bonus ──────────────────────────────────────────────
+        entropy = jnp.mean(_gaussian_entropy(log_std))
 
         total = policy_loss + VF_COEF * value_loss - ENT_COEF * entropy
+
+        # ── NaN guard: if total is bad, return zero loss (skip update) ─
+        total = jnp.where(jnp.isfinite(total), total, 0.0)
+
         return total, {
             "policy_loss": policy_loss,
             "value_loss":  value_loss,
             "entropy":     entropy,
             "total_loss":  total,
+            "ratio_mean":  jnp.mean(ratio),
+            "ratio_max":   jnp.max(ratio),
         }
 
     grads, info = jax.grad(loss_fn, has_aux=True)(train_state.params)
-    # Clip gradients
+
+    # NaN guard on gradients: replace any NaN/inf grad with 0
     grads = jax.tree_util.tree_map(
-        lambda g: jnp.clip(g, -MAX_GRAD, MAX_GRAD), grads
+        lambda g: jnp.where(jnp.isfinite(g), g, 0.0), grads
     )
+    # Global norm clip is already in the optax chain; no element-wise clip needed
     train_state = train_state.apply_gradients(grads=grads)
     return train_state, info
 
@@ -334,8 +350,10 @@ class PPOTrainer:
         for _ in range(self.n_steps):
             action, log_prob, value, cnn_feat = self._sample_action(obs)
 
+            # Sanitize features: replace NaN/inf with 0 before storing
+            cnn_feat = jnp.where(jnp.isfinite(cnn_feat), cnn_feat, 0.0)
             buf_cnn_feat.append(cnn_feat)            # (B, 256) — not raw depth
-            buf_proprio.append(obs["proprio"])
+            buf_proprio.append(obs["proprio"])        # already sanitized in env
             buf_actions.append(action)
             buf_log_prob.append(log_prob)
             buf_values.append(value)
@@ -361,6 +379,11 @@ class PPOTrainer:
 
         advantages, returns = compute_gae(rewards, values, dones)
 
+        # Normalize returns to prevent huge value targets from goal bonus
+        ret_mean = returns.mean()
+        ret_std  = returns.std() + 1e-8
+        returns_norm = (returns - ret_mean) / ret_std
+
         # Flatten (T*B, ...)
         def flat(x):
             return x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x.reshape(-1)
@@ -371,7 +394,7 @@ class PPOTrainer:
             action     = flat(jnp.stack(buf_actions)),
             log_prob   = flat(jnp.stack(buf_log_prob)),
             advantage  = flat(advantages),
-            ret        = flat(returns),
+            ret        = flat(returns_norm),
         )
 
         # One device→host sync HERE (after the loop), not inside the loop
