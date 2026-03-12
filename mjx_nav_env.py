@@ -42,7 +42,8 @@ def is_healthy(qpos: jnp.ndarray, proprio: jnp.ndarray) -> jnp.ndarray:
     corrupt gradients.
     """
     height    = qpos[:, 2]                              # z position  (B,)
-    height_ok = (height > 0.2) & (height < 2.0)
+    height_ok = (height > 0.2) & (height < 1.5)         # Changed from 2.0 to prevent backflips
+
     obs_ok    = jnp.all(jnp.isfinite(proprio), axis=-1) # (B,)
     return height_ok & obs_ok
 
