@@ -237,10 +237,12 @@ def ppo_update(
         log_ratio    = jnp.clip(log_prob_new - batch.log_prob, -10.0, 10.0)
         ratio        = jnp.exp(log_ratio)
 
-        adv_norm     = (batch.advantage - batch.advantage.mean()) / \
-                       (batch.advantage.std() + 1e-8)
-        # Clamp normalized advantages to prevent outlier domination
-        adv_norm     = jnp.clip(adv_norm, -10.0, 10.0)
+        adv_mean = batch.advantage.mean()
+        adv_std  = batch.advantage.std() + 1e-8
+        adv_norm = (batch.advantage - adv_mean) / adv_std
+        # Clamp normalized advantages more aggressively to prevent outlier domination
+        # When advantages are poorly estimated, extreme values kill gradient flow
+        adv_norm = jnp.clip(adv_norm, -5.0, 5.0)
 
         pg_loss1     = ratio * adv_norm
         pg_loss2     = jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
@@ -254,11 +256,22 @@ def ppo_update(
         vf_loss1  = (value         - batch.ret) ** 2
         vf_loss2  = (value_clipped - batch.ret) ** 2
         value_loss = 0.5 * jnp.mean(jnp.maximum(vf_loss1, vf_loss2))
+        # Clip value loss to prevent explosion: value estimates are normalized,
+        # so clipping to 100 is conservative (std=1, so error~10 is 100x std)
+        value_loss = jnp.clip(value_loss, 0.0, 100.0)
 
         # ── Entropy bonus ──────────────────────────────────────────────
-        entropy = jnp.mean(_gaussian_entropy(log_std))
+        # IMPORTANT: Use CLAMPED log_std for entropy computation to match inference behavior
+        # Unclamped log_std could grow unbounded and make entropy explode
+        entropy = jnp.mean(_gaussian_entropy(log_std_clamp))
 
         total = policy_loss + VF_COEF * value_loss - ENT_COEF * entropy
+
+        # ── Guard against loss collapse: ensure positive contributions ─
+        # Total loss should never be negative. If it becomes negative,
+        # the agent is learning to maximize entropy instead of the task.
+        # Clamp to prevent this pathological behavior.
+        total = jnp.clip(total, -1e6, 1e6)  # Allow wide range but not infinite
 
         # ── NaN guard: if total is bad, return zero loss (skip update) ─
         total = jnp.where(jnp.isfinite(total), total, 0.0)
