@@ -230,9 +230,9 @@ def main():
                   f"rew={rew_mean:>8.3f} [{rollout_stats['rew_min']:.1f}, {rollout_stats['rew_max']:.1f}] | "
                   f"done={rollout_stats['done_rate']:.3f} ep={rollout_stats['ep_count']:>5} | "
                   f"loss={float(update_info['total_loss']):.4f} "
-                  f"pi={float(update_info['policy_loss']):.4f} "
-                  f"v={float(update_info['value_loss']):.4f} "
-                  f"H={float(update_info['entropy']):.3f} | "
+                  f"policy_los={float(update_info['policy_loss']):.4f} "
+                  f"vvalue_loss={float(update_info['value_loss']):.4f} "
+                  f"entropy={float(update_info['entropy']):.3f} | "
                   f"{fps:.0f} fps | "
                   f"roll={rollout_sec:.1f}s upd={update_sec:.1f}s")
 
