@@ -402,6 +402,12 @@ class PPOTrainer:
         # value clipping (old_value ± CLIP_EPS) operates in normalized space.
         ret_mean = returns.mean()
         ret_std  = returns.std() + 1e-8
+
+        # Guard: ensure ret_std is at least reasonable
+        # If returns are nearly constant (std < 0.1), normalization will explode
+        # Ensure minimum std is higher to prevent blow-up
+        ret_std  = jnp.maximum(ret_std, 0.1)  # Force minimum std of 0.1
+
         returns_norm   = (returns        - ret_mean) / ret_std
         old_values_raw = jnp.stack(buf_values)           # (T, B) — collected values
         old_values_norm = (old_values_raw - ret_mean) / ret_std
