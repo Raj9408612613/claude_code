@@ -263,7 +263,7 @@ def ppo_update(
         # ── Entropy bonus ──────────────────────────────────────────────
         # IMPORTANT: Use CLAMPED log_std for entropy computation to match inference behavior
         # Unclamped log_std could grow unbounded and make entropy explode
-        entropy = jnp.mean(_gaussian_entropy(log_std_clamp))
+        entropy = jnp.mean(_gaussian_entropy(log_std))
 
         total = policy_loss + VF_COEF * value_loss - ENT_COEF * entropy
 
