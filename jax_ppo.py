@@ -258,7 +258,7 @@ def ppo_update(
         value_loss = 0.5 * jnp.mean(jnp.maximum(vf_loss1, vf_loss2))
         # Clip value loss to prevent explosion: value estimates are normalized,
         # so clipping to 100 is conservative (std=1, so error~10 is 100x std)
-        value_loss = jnp.clip(value_loss, 0.0, 100.0)
+        value_loss = jnp.clip(value_loss, 0.0, 1000000.0)
 
         # ── Entropy bonus ──────────────────────────────────────────────
         # IMPORTANT: Use CLAMPED log_std for entropy computation to match inference behavior
