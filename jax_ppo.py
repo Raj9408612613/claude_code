@@ -99,6 +99,8 @@ class SpotActorCritic(nn.Module):
 
         # Actor head
         action_mean   = nn.Dense(ACTION_DIM, name="actor")(x)
+        # Clip action mean — prevents runaway outputs from corrupted inputs
+        action_mean   = jnp.clip(action_mean, -5.0, 5.0)
         log_std       = self.param("log_std",
                                    nn.initializers.zeros, (ACTION_DIM,))
         log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
@@ -160,6 +162,8 @@ def _head_forward(params, cnn_feat, proprio):
     x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
     x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
     action_mean   = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
+    # Clip action mean to prevent runaway outputs when inputs are large
+    action_mean   = jnp.clip(action_mean, -5.0, 5.0)
     log_std       = params["log_std"]
     log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
     value = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
