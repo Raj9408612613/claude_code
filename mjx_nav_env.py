@@ -421,7 +421,7 @@ class SpotMJXEnv:
         ], axis=-1)        # 37-dim
 
         # Sanitize: replace any NaN/inf with 0 so the network never sees garbage
-        proprio = jnp.where(jnp.isfinite(proprio), proprio, 0.0)
+        proprio = jnp.clip(proprio, -100.0, 100.0)
 
         return {"depth": depth, "proprio": proprio}
 
