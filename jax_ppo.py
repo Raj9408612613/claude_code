@@ -400,14 +400,15 @@ class PPOTrainer:
         # Normalize returns and old values with the SAME scale so that
         # value clipping (old_value ± CLIP_EPS) operates in normalized space.
         ret_mean = returns.mean()
-        ret_std  = returns.std() + 1e-8
+        ret_std_raw = returns.std()
+        ret_std  = ret_std_raw + 1e-8
 
-        # Guard: ensure ret_std is at least reasonable
-        # If returns are nearly constant (std < 0.1), normalization will explode
-        # Ensure minimum std is higher to prevent blow-up
-        ret_std  = jnp.maximum(ret_std, 0.1)  # Force minimum std of 0.1
+        # DIAGNOSTIC: Check if normalization is being forced
+        # This reveals if returns have low variance (indicator of broken training)
+        ret_std_clamped = jnp.maximum(ret_std, 0.1)
+        is_std_clamped = ret_std_raw < 0.1  # Was the std forced up?
 
-        returns_norm   = (returns        - ret_mean) / ret_std
+        returns_norm   = (returns - ret_mean) / ret_std_clamped
         old_values_raw = jnp.stack(buf_values)           # (T, B) — collected values
         old_values_norm = (old_values_raw - ret_mean) / ret_std
 
@@ -432,6 +433,10 @@ class PPOTrainer:
             "rew_max":    float(rewards.max()),
             "done_rate":  float(dones.mean()),
             "ep_count":   int(dones.sum()),
+            "ret_std":    float(ret_std_raw),        # DEBUG: raw return std
+            "ret_mean":   float(ret_mean),           # DEBUG: return mean
+            "ret_max":    float(returns.max()),      # DEBUG: max return
+            "ret_min":    float(returns.min()),      # DEBUG: min return
         }
         return state, obs, batch, rollout_stats
 
