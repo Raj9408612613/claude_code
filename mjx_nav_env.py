@@ -188,27 +188,27 @@ class SpotMJXEnv:
         dx_batch = dx_batch.replace(qpos=qpos)
 
         # Randomize number of active obstacles per env (2–6, excluding humanoid)
-  rng, k4, k5 = jax.random.split(rng, 3)          # <-- add k5
-  n_active = jax.random.randint(k5, (self.n_envs,), minval=2, maxval=7)
-  # (B,) in [2,6]
+        rng, k4, k5 = jax.random.split(rng, 3)     # <-- add k5
+        n_active = jax.random.randint(k5, (self.n_envs,), minval=2, maxval=7)
+          # (B,) in [2,6]
 
-  # Generate positions for ALL obstacles as before
-  obs_xy = jax.random.uniform(k4, (self.n_envs, N_OBS, 2), minval=-ROOM_HALF, maxval=ROOM_HALF)
-  obs_z  = jnp.ones((self.n_envs, N_OBS, 1)) * 0.5
-  obs_pos_new = jnp.concatenate([obs_xy, obs_z], axis=-1)  # (B, N_OBS, 3)
+          # Generate positions for ALL obstacles as before
+        obs_xy = jax.random.uniform(k4, (self.n_envs, N_OBS, 2), minval=-ROOM_HALF, maxval=ROOM_HALF)
+        obs_z  = jnp.ones((self.n_envs, N_OBS, 1)) * 0.5
+        obs_pos_new = jnp.concatenate([obs_xy, obs_z], axis=-1)  # (B, N_OBS, 3)
 
-  # Mask: obstacle index i is active only if i < n_active (exclude humanoid at N_OBS-1)
-  n_non_human = N_OBS - 1                                   # = 30 (static + dynamic)
-  obs_indices  = jnp.arange(n_non_human)                    # shape (30,)
-  active_mask  = obs_indices[None, :] < n_active[:, None]   # (B, 30) bool                                                                   
+        # Mask: obstacle index i is active only if i < n_active (exclude humanoid at N_OBS-1)
+        n_non_human = N_OBS - 1                                   # = 30 (static + dynamic)
+        obs_indices  = jnp.arange(n_non_human)                    # shape (30,)
+        active_mask  = obs_indices[None, :] < n_active[:, None]   # (B, 30) bool                                                                   
    
-  # Send inactive obstacles off-scene                                    
-  OFF_SCENE = jnp.array([100.0, 0.0, 0.5])                             
-  obs_pos_new = obs_pos_new.at[:, :n_non_human, :].set(                  
-      jnp.where(active_mask[:, :, None],                                 
-                obs_pos_new[:, :n_non_human, :],                         
-                OFF_SCENE)                                               
-  )                                     
+        # Send inactive obstacles off-scene                                    
+        OFF_SCENE = jnp.array([100.0, 0.0, 0.5])                             
+        obs_pos_new = obs_pos_new.at[:, :n_non_human, :].set(
+          jnp.where(active_mask[:, :, None],
+                   obs_pos_new[:, :n_non_human, :],                         
+                    OFF_SCENE)                                               
+        )                                     
         # ── Place humanoid near the randomised goal ───────────────────
         # Start at goal + patrol_radius along X, clipped to room bounds.
         patrol_r = float(HUMANOID_CFG["patrol_radius"])
