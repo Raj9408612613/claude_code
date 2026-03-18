@@ -276,16 +276,58 @@ def ppo_update(
         # ── NaN guard: if total is bad, return zero loss (skip update) ─
         total = jnp.where(jnp.isfinite(total), total, 0.0)
 
+        # ── Diagnostic metrics ─────────────────────────────────────────
+        # Approximate KL divergence: E[(ratio - 1) - log(ratio)]
+        approx_kl = jnp.mean((ratio - 1.0) - log_ratio)
+        # Clip fraction: how often the ratio is outside [1-eps, 1+eps]
+        clip_frac = jnp.mean(
+            (ratio < (1.0 - CLIP_EPS)) | (ratio > (1.0 + CLIP_EPS))
+        )
+
         return total, {
-            "policy_loss": policy_loss,
-            "value_loss":  value_loss,
-            "entropy":     entropy,
-            "total_loss":  total,
-            "ratio_mean":  jnp.mean(ratio),
-            "ratio_max":   jnp.max(ratio),
+            "policy_loss":     policy_loss,
+            "value_loss":      value_loss,
+            "entropy":         entropy,
+            "total_loss":      total,
+            "ratio_mean":      jnp.mean(ratio),
+            "ratio_max":       jnp.max(ratio),
+            # Diagnostic extras
+            "approx_kl":       approx_kl,
+            "clip_frac":       clip_frac,
+            "log_std_values":  log_std,                    # (ACTION_DIM,)
+            "action_mean_abs": jnp.mean(jnp.abs(mean)),
+            "action_std_mean": jnp.mean(jnp.exp(log_std)),
+            "value_pred_mean": jnp.mean(value),
+            "value_pred_std":  jnp.std(value),
+            "value_pred_min":  jnp.min(value),
+            "value_pred_max":  jnp.max(value),
+            "adv_mb_mean":     adv_mean,
+            "adv_mb_std":      adv_std,
         }
 
     grads, info = jax.grad(loss_fn, has_aux=True)(train_state.params)
+
+    # ── Gradient diagnostics (before NaN cleanup) ──────────────────
+    # Compute per-module gradient norms and NaN fraction
+    flat_grads, _ = jax.tree_util.tree_flatten(grads)
+    all_elems = jnp.concatenate([g.ravel() for g in flat_grads])
+    grad_norm = jnp.sqrt(jnp.sum(all_elems ** 2))
+    grad_nan_frac = jnp.mean(~jnp.isfinite(all_elems))
+
+    info["grad_norm"] = grad_norm
+    info["grad_nan_frac"] = grad_nan_frac
+
+    # Per-module gradient norms
+    for module_name in ['cnn', 'proprio', 'trunk0', 'trunk1', 'actor', 'critic0', 'critic1']:
+        if module_name in grads:
+            module_grads = grads[module_name]
+            module_flat, _ = jax.tree_util.tree_flatten(module_grads)
+            module_elems = jnp.concatenate([g.ravel() for g in module_flat])
+            info[f"grad_norm_{module_name}"] = jnp.sqrt(jnp.sum(module_elems ** 2))
+
+    # log_std gradient norm (it's a top-level param, not a sub-module)
+    if "log_std" in grads:
+        info["grad_norm_log_std"] = jnp.sqrt(jnp.sum(grads["log_std"] ** 2))
 
     # NaN guard on gradients: replace any NaN/inf grad with 0
     grads = jax.tree_util.tree_map(
@@ -365,6 +407,7 @@ class PPOTrainer:
         buf_rewards  = []
         buf_dones    = []
         buf_values   = []
+        buf_reward_info = []   # per-step reward component dicts
 
         for _ in range(self.n_steps):
             action, log_prob, value, cnn_feat = self._sample_action(obs)
@@ -377,10 +420,11 @@ class PPOTrainer:
             buf_log_prob.append(log_prob)
             buf_values.append(value)
 
-            state, obs, reward, done, _ = env.step(state, action)
+            state, obs, reward, done, step_info = env.step(state, action)
 
             buf_rewards.append(reward)
             buf_dones.append(done.astype(jnp.float32))
+            buf_reward_info.append(step_info)
 
             # Auto-reset: immediately replace terminated envs with fresh ones
             self.rng, k = jax.random.split(self.rng)
@@ -428,6 +472,52 @@ class PPOTrainer:
             "done_rate":  float(dones.mean()),
             "ep_count":   int(dones.sum()),
         }
+
+        # ── Rollout diagnostics ────────────────────────────────────────
+        raw_values = jnp.stack(buf_values)                      # (T, B)
+        rollout_stats["_diag"] = {
+            # Raw returns (before normalization)
+            "ret_raw_mean":      float(returns.mean()),
+            "ret_raw_std":       float(returns.std()),
+            "ret_raw_min":       float(returns.min()),
+            "ret_raw_max":       float(returns.max()),
+            # Normalized returns
+            "ret_norm_mean":     float(returns_norm.mean()),
+            "ret_norm_std":      float(returns_norm.std()),
+            "ret_norm_min":      float(returns_norm.min()),
+            "ret_norm_max":      float(returns_norm.max()),
+            # Normalization scale
+            "ret_scale_mean":    float(ret_mean),
+            "ret_scale_std":     float(ret_std),
+            # Advantages
+            "adv_mean":          float(advantages.mean()),
+            "adv_std":           float(advantages.std()),
+            "adv_min":           float(advantages.min()),
+            "adv_max":           float(advantages.max()),
+            # Value predictions (raw, before normalization)
+            "val_raw_mean":      float(raw_values.mean()),
+            "val_raw_std":       float(raw_values.std()),
+            "val_raw_min":       float(raw_values.min()),
+            "val_raw_max":       float(raw_values.max()),
+            # Explained variance: how well values predict returns
+            "explained_var":     float(1.0 - jnp.var(returns - raw_values)
+                                       / (jnp.var(returns) + 1e-8)),
+            # Observation health
+            "proprio_mean":      float(jnp.stack(buf_proprio).mean()),
+            "proprio_std":       float(jnp.stack(buf_proprio).std()),
+            "proprio_nan_frac":  float(jnp.mean(~jnp.isfinite(jnp.stack(buf_proprio)))),
+            "cnn_feat_mean":     float(jnp.stack(buf_cnn_feat).mean()),
+            "cnn_feat_std":      float(jnp.stack(buf_cnn_feat).std()),
+            "cnn_feat_nan_frac": float(jnp.mean(~jnp.isfinite(jnp.stack(buf_cnn_feat)))),
+        }
+
+        # Aggregate reward components across timesteps (mean over T and B)
+        if buf_reward_info:
+            reward_components = {}
+            for key in buf_reward_info[0]:
+                vals = jnp.stack([info[key] for info in buf_reward_info])  # (T, B)
+                reward_components[key] = float(vals.mean())
+            rollout_stats["_diag"]["reward_components"] = reward_components
         return state, obs, batch, rollout_stats
 
     # ──────────────────────────────────────────────────────────────────

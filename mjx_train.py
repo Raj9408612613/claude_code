@@ -23,6 +23,7 @@ import jax.numpy as jnp
 
 from mjx_nav_env import SpotMJXEnv
 from jax_ppo import PPOTrainer
+from ppo_diagnostics import print_diagnostics
 
 
 def parse_args():
@@ -129,6 +130,21 @@ class SimpleLogger:
             if "ratio_mean" in update_info:
                 self.tb_writer.add_scalar("debug/ratio_mean", float(update_info["ratio_mean"]), step)
                 self.tb_writer.add_scalar("debug/ratio_max",  float(update_info["ratio_max"]),  step)
+            # Diagnostic scalars
+            for diag_key in ["approx_kl", "clip_frac", "action_mean_abs",
+                             "action_std_mean", "grad_norm", "grad_nan_frac"]:
+                if diag_key in update_info:
+                    self.tb_writer.add_scalar(f"diag/{diag_key}", float(update_info[diag_key]), step)
+            # Rollout diagnostics
+            diag = rollout_stats.get("_diag", {})
+            for diag_key in ["ret_raw_mean", "ret_raw_std", "adv_mean", "adv_std",
+                             "val_raw_mean", "val_raw_std", "explained_var",
+                             "ret_scale_mean", "ret_scale_std"]:
+                if diag_key in diag:
+                    self.tb_writer.add_scalar(f"diag/{diag_key}", diag[diag_key], step)
+            # Reward components
+            for comp_name, comp_val in diag.get("reward_components", {}).items():
+                self.tb_writer.add_scalar(f"reward_comp/{comp_name}", comp_val, step)
             self.tb_writer.add_scalar("timing/rollout_sec", rollout_sec, step)
             self.tb_writer.add_scalar("timing/update_sec",  update_sec,  step)
             self.tb_writer.flush()
@@ -235,6 +251,14 @@ def main():
                   f"entropy={float(update_info['entropy']):.3f} | "
                   f"{fps:.0f} fps | "
                   f"roll={rollout_sec:.1f}s upd={update_sec:.1f}s")
+
+            # ── Diagnostics ────────────────────────────────────────────
+            rollout_diag = rollout_stats.get("_diag", {})
+            update_diag = {k: (float(v) if hasattr(v, 'shape') and v.ndim == 0 else
+                              (v.tolist() if hasattr(v, 'tolist') and hasattr(v, 'ndim') and v.ndim > 0 else
+                               float(v) if not isinstance(v, (list, dict)) else v))
+                          for k, v in update_info.items()}
+            print_diagnostics(update, rollout_diag, update_diag)
 
             # Track best
             if rew_mean > best_rew_mean:
