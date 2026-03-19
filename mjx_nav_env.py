@@ -340,6 +340,13 @@ class SpotMJXEnv:
         joint_vel  = jnp.where(jnp.isfinite(joint_vel),  joint_vel,  0.0)
         joint_vel  = jnp.clip(joint_vel,  -100.0, 100.0)
 
+        # Min obstacle dist (heuristic: nearest mocap body)
+        obs_xy  = mocap_pos[:, :, :2]          # (B, N_OBS, 2)
+        rob_xy  = robot_pos[:, :2, None].transpose(0, 2, 1)  # (B, 1, 2) → broadcast
+        dists   = jnp.linalg.norm(obs_xy - robot_pos[:, None, :2], axis=-1)  # (B, N_OBS)
+        min_dist = jnp.min(dists, axis=-1)     # (B,)
+        has_coll = min_dist < 0.35             # (B,) bool
+
         prev_pos   = prev_qpos[:, 0:3]
         prev_pos   = jnp.where(jnp.isfinite(prev_pos), prev_pos, 0.0)
         prev_pos   = jnp.clip(prev_pos, -50.0, 50.0)
