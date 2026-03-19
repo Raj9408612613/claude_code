@@ -36,7 +36,7 @@ ENT_COEF     = 0.01
 VF_COEF      = 0.5
 MAX_GRAD     = 0.5
 LR           = 3e-4
-N_EPOCHS     = 10
+N_EPOCHS     = 4
 MINIBATCH_SZ = 512
 CNN_FEAT_DIM = 256
 PROPRIO_DIM  = 37
@@ -99,8 +99,8 @@ class SpotActorCritic(nn.Module):
 
         # Actor head
         action_mean   = nn.Dense(ACTION_DIM, name="actor")(x)
-        # Clip action mean — prevents runaway outputs from corrupted inputs
-        action_mean   = jnp.clip(action_mean, -5.0, 5.0)
+        # Clip action mean — actions are in [-1,1], so mean beyond ±2 is already extreme
+        action_mean   = jnp.clip(action_mean, -2.0, 2.0)
         log_std       = self.param("log_std",
                                    nn.initializers.zeros, (ACTION_DIM,))
         log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
@@ -162,8 +162,8 @@ def _head_forward(params, cnn_feat, proprio):
     x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
     x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
     action_mean   = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
-    # Clip action mean to prevent runaway outputs when inputs are large
-    action_mean   = jnp.clip(action_mean, -5.0, 5.0)
+    # Clip action mean — actions are in [-1,1], so mean beyond ±2 is already extreme
+    action_mean   = jnp.clip(action_mean, -2.0, 2.0)
     log_std       = params["log_std"]
     log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
     value = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
@@ -526,8 +526,9 @@ class PPOTrainer:
 
     # ──────────────────────────────────────────────────────────────────
     def update(self, batch: RolloutBatch) -> Dict:
-        """Run N_EPOCHS of PPO updates on the collected batch."""
+        """Run N_EPOCHS of PPO updates with KL early stopping."""
         total_samples = batch.cnn_feat.shape[0]
+        TARGET_KL = 0.03   # stop epoch loop if approx KL exceeds this
 
         for epoch in range(N_EPOCHS):
             self.rng, k = jax.random.split(self.rng)
@@ -546,7 +547,14 @@ class PPOTrainer:
                 )
                 self.train_state, info = ppo_update(self.train_state, mb)
 
-        return info   # last minibatch's info
+            # Early stop if policy changed too much this epoch
+            approx_kl = float(info.get("approx_kl", 0.0))
+            if approx_kl > TARGET_KL:
+                info["early_stop_epoch"] = epoch + 1
+                break
+
+        info["epochs_run"] = epoch + 1
+        return info
 
     # ──────────────────────────────────────────────────────────────────
     def save(self, path: str):
