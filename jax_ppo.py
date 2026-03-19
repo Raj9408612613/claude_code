@@ -140,6 +140,7 @@ def _inference_step(params, depth, proprio, rng_key):
     x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
     x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
     mean      = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
+    mean      = jnp.clip(mean, -2.0, 2.0)   # Must match _head_forward clip!
     log_std   = jnp.clip(params["log_std"], LOG_STD_MIN, LOG_STD_MAX)
     value     = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
     value     = nn.Dense(1).apply({"params": params["critic1"]}, value).squeeze(-1)
@@ -241,12 +242,9 @@ def ppo_update(
         log_ratio    = jnp.clip(log_prob_new - batch.log_prob, -10.0, 10.0)
         ratio        = jnp.exp(log_ratio)
 
-        adv_mean = batch.advantage.mean()
-        adv_std  = batch.advantage.std() + 1e-8
-        adv_norm = (batch.advantage - adv_mean) / adv_std
-        # Clamp normalized advantages more aggressively to prevent outlier domination
-        # When advantages are poorly estimated, extreme values kill gradient flow
-        adv_norm = jnp.clip(adv_norm, -5.0, 5.0)
+        # Advantages are already globally normalized (mean=0, std=1) in
+        # collect_rollout.  Just clip outliers to prevent single-sample domination.
+        adv_norm = jnp.clip(batch.advantage, -5.0, 5.0)
 
         pg_loss1     = ratio * adv_norm
         pg_loss2     = jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
@@ -458,12 +456,20 @@ class PPOTrainer:
         def flat(x):
             return x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x.reshape(-1)
 
+        # Normalize advantages globally BEFORE the update loop so every
+        # minibatch sees mean≈0, std≈1 advantages.  This prevents the first
+        # minibatch from receiving extreme advantages that blow up the ratio.
+        adv_flat = flat(advantages)
+        adv_mean = adv_flat.mean()
+        adv_std  = adv_flat.std() + 1e-8
+        adv_norm = (adv_flat - adv_mean) / adv_std
+
         batch = RolloutBatch(
             cnn_feat   = flat(jnp.stack(buf_cnn_feat)),  # (T*B, 256)
             proprio    = flat(jnp.stack(buf_proprio)),
             action     = flat(jnp.stack(buf_actions)),
             log_prob   = flat(jnp.stack(buf_log_prob)),
-            advantage  = flat(advantages),
+            advantage  = adv_norm,
             ret        = flat(returns_norm),
             old_value  = flat(old_values_norm),
         )

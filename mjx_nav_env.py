@@ -421,21 +421,28 @@ class SpotMJXEnv:
         goal_dist  = jnp.linalg.norm(goal_diff, axis=-1, keepdims=True)  # (B, 1)
         goal_dir   = goal_diff / (goal_dist + 1e-8)
 
+        # Scale each component to roughly [-1, 1] range so the network
+        # sees inputs with std ≈ 1 instead of std ≈ 31.
+        # joint_pos:  typical range ±π   → /π
+        # joint_vel:  typical range ±20  → /20
+        # robot_quat: already in [-1,1]
+        # robot_linv: typical range ±5   → /5
+        # robot_angv: typical range ±10  → /10
+        # goal_dir:   already in [-1,1]
+        # goal_dist:  typical range 0-10 → /5
         proprio = jnp.concatenate([
-            joint_pos,    # 12
-            joint_vel,    # 12
-            robot_quat,   # 4
-            robot_linv,   # 3
-            robot_angv,   # 3
-            goal_dir,     # 2
-            goal_dist,    # 1
-        ], axis=-1)        # 37-dim
+            joint_pos / 3.14,    # 12
+            joint_vel / 20.0,    # 12
+            robot_quat,          # 4
+            robot_linv / 5.0,    # 3
+            robot_angv / 10.0,   # 3
+            goal_dir,            # 2
+            goal_dist / 5.0,     # 1
+        ], axis=-1)              # 37-dim
 
-        # Sanitize: replace NaN/inf with 0, then clip to ±100.
-        # isfinite alone is insufficient — physics explosions produce
-        # huge-but-finite values (1e9+) that poison the network.
+        # Sanitize: replace NaN/inf with 0, then clip to ±10.
         proprio = jnp.where(jnp.isfinite(proprio), proprio, 0.0)
-        proprio = jnp.clip(proprio, -100.0, 100.0)
+        proprio = jnp.clip(proprio, -10.0, 10.0)
 
         return {"depth": depth, "proprio": proprio}
 
