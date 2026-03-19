@@ -303,8 +303,8 @@ def ppo_update(
             "value_pred_std":  jnp.std(value),
             "value_pred_min":  jnp.min(value),
             "value_pred_max":  jnp.max(value),
-            "adv_mb_mean":     adv_mean,
-            "adv_mb_std":      adv_std,
+            "adv_mb_mean":     jnp.mean(batch.advantage),
+            "adv_mb_std":      jnp.std(batch.advantage),
         }
 
     grads, info = jax.grad(loss_fn, has_aux=True)(train_state.params)
