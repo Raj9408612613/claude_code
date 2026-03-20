@@ -11,10 +11,12 @@ import os
 import pickle
 import time
 
+# Enable EGL for headless rendering (must be set before importing mujoco)
+os.environ["MUJOCO_GL"] = "egl"
+
 import jax
 import jax.numpy as jnp
 import mujoco
-import mujoco.viewer
 import numpy as np
 import mediapy as media
 
