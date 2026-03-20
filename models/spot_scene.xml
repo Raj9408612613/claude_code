@@ -10,6 +10,9 @@
 
   <compiler angle="radian" autolimits="true"/>
   <option timestep="0.005" gravity="0 0 -9.81" integrator="Euler"/>
+  <visual>
+    <global offwidth="1920" offheight="1080"/>
+  </visual>
 
   <default>
     <joint damping="1.0" armature="0.01" frictionloss="0.1"/>
