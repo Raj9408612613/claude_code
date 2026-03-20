@@ -117,9 +117,9 @@ def main():
                         help="Use deterministic (mean) actions instead of sampling")
     parser.add_argument("--fps", type=int, default=30,
                         help="Video frames per second")
-    parser.add_argument("--width", type=int, default=1280,
+    parser.add_argument("--width", type=int, default=640,
                         help="Video width in pixels")
-    parser.add_argument("--height", type=int, default=720,
+    parser.add_argument("--height", type=int, default=480,
                         help="Video height in pixels")
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed")
