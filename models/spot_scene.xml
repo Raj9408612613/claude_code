@@ -147,18 +147,28 @@
       <!-- front_center: pos=[0.32,0.0,0.05], rot=[0°,-10°,0°] euler xyz -->
       <site name="cam_front_center" pos="0.32 0.0 0.05"
             euler="0 -0.1745 0" size="0.01"/>
+      <camera name="depth_front_center" pos="0.32 0.0 0.05"
+              euler="0 -0.1745 0" fovy="58" mode="fixed"/>
       <!-- front_left: pos=[0.20,0.16,0.05], rot=[0°,-10°,70°] -->
       <site name="cam_front_left" pos="0.20 0.16 0.05"
             euler="0 -0.1745 1.2217" size="0.01"/>
+      <camera name="depth_front_left" pos="0.20 0.16 0.05"
+              euler="0 -0.1745 1.2217" fovy="58" mode="fixed"/>
       <!-- front_right: pos=[0.20,-0.16,0.05], rot=[0°,-10°,-70°] -->
       <site name="cam_front_right" pos="0.20 -0.16 0.05"
             euler="0 -0.1745 -1.2217" size="0.01"/>
+      <camera name="depth_front_right" pos="0.20 -0.16 0.05"
+              euler="0 -0.1745 -1.2217" fovy="58" mode="fixed"/>
       <!-- rear_left: pos=[-0.28,0.14,0.05], rot=[0°,-10°,145°] -->
       <site name="cam_rear_left" pos="-0.28 0.14 0.05"
             euler="0 -0.1745 2.5307" size="0.01"/>
+      <camera name="depth_rear_left" pos="-0.28 0.14 0.05"
+              euler="0 -0.1745 2.5307" fovy="58" mode="fixed"/>
       <!-- rear_right: pos=[-0.28,-0.14,0.05], rot=[0°,-10°,-145°] -->
       <site name="cam_rear_right" pos="-0.28 -0.14 0.05"
             euler="0 -0.1745 -2.5307" size="0.01"/>
+      <camera name="depth_rear_right" pos="-0.28 -0.14 0.05"
+              euler="0 -0.1745 -2.5307" fovy="58" mode="fixed"/>
 
       <!-- IMU site at body center -->
       <site name="imu" pos="0 0 0" size="0.01"/>

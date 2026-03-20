@@ -11,10 +11,12 @@ import os
 import pickle
 import time
 
+# Enable EGL for headless rendering (must be set before importing mujoco)
+os.environ["MUJOCO_GL"] = "egl"
+
 import jax
 import jax.numpy as jnp
 import mujoco
-import mujoco.viewer
 import numpy as np
 import mediapy as media
 
@@ -31,6 +33,19 @@ STANDING_POSE = np.array([0.0, 0.8, -1.6] * 4, dtype=np.float32)
 
 ROOM_HALF = 4.5
 MAX_STEPS = 1000
+
+# Depth camera names (must match XML)
+DEPTH_CAM_NAMES = [
+    "depth_front_center",
+    "depth_front_left",
+    "depth_front_right",
+    "depth_rear_left",
+    "depth_rear_right",
+]
+DEPTH_H = 120
+DEPTH_W = 160
+DEPTH_MIN = 0.1
+DEPTH_MAX = 10.0
 
 
 def load_checkpoint(ckpt_path):
@@ -67,7 +82,6 @@ def policy_forward(params, depth, proprio, rng_key, deterministic=False):
 
 def build_proprio(mj_model, mj_data, goal_xy):
     """Build the 37-dim proprioception vector from CPU MuJoCo state."""
-    # Robot state
     qpos = mj_data.qpos
     qvel = mj_data.qvel
 
@@ -78,7 +92,6 @@ def build_proprio(mj_model, mj_data, goal_xy):
     robot_angv = qvel[3:6]   # 3
     robot_xy = qpos[0:2]     # 2
 
-    # Goal
     goal_diff = goal_xy - robot_xy
     goal_dist = np.linalg.norm(goal_diff)
     goal_dir = goal_diff / (goal_dist + 1e-8)
@@ -97,10 +110,32 @@ def build_proprio(mj_model, mj_data, goal_xy):
     return proprio
 
 
-def render_depth_placeholder(n_cams=5, h=120, w=160):
-    """Return a zero depth image (placeholder since we can't use Warp for 1 env easily).
-    The agent will rely mostly on proprioception for this visualization."""
-    return np.zeros((1, n_cams, h, w), dtype=np.float32)
+def render_depth(mj_model, mj_data, depth_renderer, cam_ids):
+    """Render depth from the 5 onboard cameras using MuJoCo's depth buffer."""
+    depths = np.zeros((1, len(cam_ids), DEPTH_H, DEPTH_W), dtype=np.float32)
+    for i, cam_id in enumerate(cam_ids):
+        cam = mujoco.MjvCamera()
+        cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        cam.fixedcamid = cam_id
+        depth_renderer.update_scene(mj_data, cam)
+        depth_renderer.enable_depth_rendering()
+        raw_depth = depth_renderer.render()
+        depth_renderer.disable_depth_rendering()
+        # MuJoCo returns znear-to-zfar linearized depth; convert to meters
+        # Using the formula: depth_m = near * far / (far - (far - near) * raw)
+        extent = mj_model.stat.extent
+        near = mj_model.vis.map.znear * extent
+        far = mj_model.vis.map.zfar * extent
+        # Avoid division by zero
+        denom = far - (far - near) * raw_depth
+        denom = np.where(denom < 1e-6, 1e-6, denom)
+        depth_m = near * far / denom
+        # Clip to valid range
+        depth_m = np.clip(depth_m, DEPTH_MIN, DEPTH_MAX)
+        # Set sky pixels (raw_depth ~= 1.0) to max depth
+        depth_m = np.where(raw_depth > 0.999, DEPTH_MAX, depth_m)
+        depths[0, i] = depth_m
+    return depths
 
 
 def main():
@@ -125,6 +160,8 @@ def main():
                         help="Random seed")
     parser.add_argument("--camera", type=str, default=None,
                         help="MuJoCo camera name for rendering (None = free camera)")
+    parser.add_argument("--warmup", type=int, default=200,
+                        help="Warmup steps to let robot settle before policy acts")
     args = parser.parse_args()
 
     # Load checkpoint
@@ -136,17 +173,28 @@ def main():
     mj_model = mujoco.MjModel.from_xml_path(xml_path)
     mj_data = mujoco.MjData(mj_model)
 
-    # Setup renderer
+    # Setup video renderer
     renderer = mujoco.Renderer(mj_model, height=args.height, width=args.width)
 
-    # Camera setup
+    # Setup depth renderer (small, matches training resolution)
+    depth_renderer = mujoco.Renderer(mj_model, height=DEPTH_H, width=DEPTH_W)
+
+    # Resolve depth camera IDs
+    cam_ids = []
+    for name in DEPTH_CAM_NAMES:
+        cid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+        if cid < 0:
+            print(f"WARNING: Camera '{name}' not found in XML, depth will be zeros")
+        cam_ids.append(cid)
+    print(f"Depth cameras resolved: {cam_ids}")
+
+    # Video camera setup
     if args.camera:
         cam_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_CAMERA, args.camera)
         cam = mujoco.MjvCamera()
         cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
         cam.fixedcamid = cam_id
     else:
-        # Third-person tracking camera
         cam = mujoco.MjvCamera()
         cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         cam.trackbodyid = mj_model.body("base_link").id
@@ -179,25 +227,37 @@ def main():
         mj_data.qpos[7:19] = STANDING_POSE
 
         # Random goal
-        goal_dist = float(jax.random.uniform(k3, (), minval=2.0, maxval=6.0))
+        goal_dist_val = float(jax.random.uniform(k3, (), minval=2.0, maxval=6.0))
         goal_ang = float(jax.random.uniform(k3, (), minval=0.0, maxval=2 * 3.14159))
-        goal_xy = robot_xy + np.array([goal_dist * np.cos(goal_ang),
-                                        goal_dist * np.sin(goal_ang)])
+        goal_xy = robot_xy + np.array([goal_dist_val * np.cos(goal_ang),
+                                        goal_dist_val * np.sin(goal_ang)])
         goal_xy = np.clip(goal_xy, -ROOM_HALF, ROOM_HALF)
 
         # Place a visual marker at the goal (use first mocap body)
         if mj_model.nmocap > 0:
             mj_data.mocap_pos[0] = [goal_xy[0], goal_xy[1], 0.1]
 
+        # Set standing pose as control target
+        mj_data.ctrl[:12] = STANDING_POSE
         mujoco.mj_forward(mj_model, mj_data)
+
+        # Warmup: let the robot settle with standing pose controls
+        print(f"  Warming up for {args.warmup} steps...")
+        for _ in range(args.warmup):
+            mj_data.ctrl[:12] = STANDING_POSE
+            for _ in range(physics_substeps):
+                mujoco.mj_step(mj_model, mj_data)
+
+        warmup_height = mj_data.qpos[2]
+        print(f"  After warmup: height={warmup_height:.3f}")
 
         prev_action = np.zeros(12, dtype=np.float32)
         frames = []
 
         for step in range(MAX_STEPS):
-            # Build observation
+            # Build observation with real depth
             proprio = build_proprio(mj_model, mj_data, goal_xy)
-            depth = render_depth_placeholder()
+            depth = render_depth(mj_model, mj_data, depth_renderer, cam_ids)
 
             # Get action from policy
             rng, act_key = jax.random.split(rng)
@@ -220,7 +280,7 @@ def main():
             for _ in range(physics_substeps):
                 mujoco.mj_step(mj_model, mj_data)
 
-            # Render frame
+            # Render video frame
             renderer.update_scene(mj_data, cam)
             frame = renderer.render()
             frames.append(frame.copy())
@@ -230,24 +290,22 @@ def main():
             robot_pos = mj_data.qpos[0:2]
             dist_to_goal = np.linalg.norm(robot_pos - goal_xy)
 
-            # Compute tilt (how far from upright)
+            # Compute tilt
             quat = mj_data.qpos[3:7]
-            # z-component of the up vector in body frame
             w, x, y, z = quat
             up_z = 1.0 - 2.0 * (x * x + y * y)
             tilt = np.arccos(np.clip(up_z, -1.0, 1.0))
 
             if dist_to_goal < 0.5:
                 print(f"  Step {step}: GOAL REACHED! dist={dist_to_goal:.2f}")
-                # Add a few more frames so the viewer can see
                 for _ in range(30):
                     renderer.update_scene(mj_data, cam)
                     frames.append(renderer.render().copy())
                 break
-            elif height < 0.2:
+            elif height < 0.15:
                 print(f"  Step {step}: Fallen. height={height:.2f}")
                 break
-            elif tilt > 1.05:  # ~60 degrees
+            elif tilt > 1.2:  # ~69 degrees
                 print(f"  Step {step}: Tipped over. tilt={np.degrees(tilt):.1f} deg")
                 break
 
