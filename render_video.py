@@ -295,6 +295,17 @@ def main():
             w, x, y, z = quat
             up_z = 1.0 - 2.0 * (x * x + y * y)
             tilt = np.arccos(np.clip(up_z, -1.0, 1.0))
+                                                            # Early stop on catastrophic failure only
+            if height < 0.05:
+                print(f"  Step {step}: Collapsed. height={height:.2f}")
+                break
+            if not np.all(np.isfinite(mj_data.qpos)):
+                print(f"  Step {step}: NaN/Inf detected in qpos, stopping.")
+                break
+            if not np.all(np.isfinite(mj_data.qvel)):
+                print(f"  Step {step}: NaN/Inf detected in qvel, stopping.")
+                break
+
 
             if step % 50 == 0:
                 print(f"  Step {step}: pos=({mj_data.qpos[0]:.1f}, {mj_data.qpos[1]:.1f}), "
