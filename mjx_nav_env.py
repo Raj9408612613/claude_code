@@ -47,10 +47,22 @@ def is_healthy(qpos: jnp.ndarray, proprio: jnp.ndarray) -> jnp.ndarray:
     obs_ok    = jnp.all(jnp.isfinite(proprio), axis=-1) # (B,)
     return height_ok & obs_ok
 
-# ── Joint limits (from config.py SPOT_ROBOT) ─────────────────────────────────
-JOINT_LOWER = jnp.array([-0.8,-0.6,-2.8]*4, dtype=jnp.float32)
-JOINT_UPPER = jnp.array([ 0.8, 2.4,-0.5]*4, dtype=jnp.float32)
-STANDING_POSE = jnp.array([0.0, 0.8, -1.6]*4, dtype=jnp.float32)
+# ── Joint limits (real Spot SDK values from MuJoCo Menagerie) ────────────────
+# Per-joint limits: fl, fr, hl, hr (each has slightly different knee limits)
+JOINT_LOWER = jnp.array([
+    -0.785398, -0.898845, -2.7929,   # fl: hx, hy, kn
+    -0.785398, -0.898845, -2.7929,   # fr
+    -0.785398, -0.898845, -2.7929,   # hl
+    -0.785398, -0.898845, -2.7929,   # hr
+], dtype=jnp.float32)
+JOINT_UPPER = jnp.array([
+     0.785398,  2.29511,  -0.254402, # fl
+     0.785398,  2.24363,  -0.255648, # fr
+     0.785398,  2.29511,  -0.247067, # hl
+     0.785398,  2.29511,  -0.248282, # hr
+], dtype=jnp.float32)
+# Real standing pose from Spot SDK (home keyframe)
+STANDING_POSE = jnp.array([0.0, 1.04, -1.8]*4, dtype=jnp.float32)
 
 # Room half-extents for random placement (10×10 m room)
 ROOM_HALF = 4.5   # keep 0.5m from walls
@@ -180,7 +192,7 @@ class SpotMJXEnv:
         # Set x, y, z height
         qpos = qpos.at[:, 0].set(robot_xy[:, 0])
         qpos = qpos.at[:, 1].set(robot_xy[:, 1])
-        qpos = qpos.at[:, 2].set(0.52)           # standing height
+        qpos = qpos.at[:, 2].set(0.46)           # standing height (real Spot)
         # Set yaw via quaternion: [cos(θ/2), 0, 0, sin(θ/2)]
         qpos = qpos.at[:, 3].set(jnp.cos(robot_yaw / 2))
         qpos = qpos.at[:, 6].set(jnp.sin(robot_yaw / 2))
