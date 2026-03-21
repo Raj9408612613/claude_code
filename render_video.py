@@ -32,7 +32,7 @@ JOINT_UPPER = np.array([0.8, 2.4, -0.5] * 4, dtype=np.float32)
 STANDING_POSE = np.array([0.0, 0.8, -1.6] * 4, dtype=np.float32)
 
 ROOM_HALF = 4.5
-MAX_STEPS = 1000
+MAX_STEPS = 250
 
 # Depth camera names (must match XML)
 DEPTH_CAM_NAMES = [
@@ -296,20 +296,7 @@ def main():
             up_z = 1.0 - 2.0 * (x * x + y * y)
             tilt = np.arccos(np.clip(up_z, -1.0, 1.0))
 
-            if dist_to_goal < 0.5:
-                print(f"  Step {step}: GOAL REACHED! dist={dist_to_goal:.2f}")
-                for _ in range(30):
-                    renderer.update_scene(mj_data, cam)
-                    frames.append(renderer.render().copy())
-                break
-            elif height < 0.15:
-                print(f"  Step {step}: Fallen. height={height:.2f}")
-                break
-            elif tilt > 1.2:  # ~69 degrees
-                print(f"  Step {step}: Tipped over. tilt={np.degrees(tilt):.1f} deg")
-                break
-
-            if step % 100 == 0:
+            if step % 50 == 0:
                 print(f"  Step {step}: pos=({mj_data.qpos[0]:.1f}, {mj_data.qpos[1]:.1f}), "
                       f"dist_to_goal={dist_to_goal:.2f}, height={height:.2f}")
 
