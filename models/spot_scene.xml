@@ -2,7 +2,7 @@
   <!--
     Spot Robot Scene — MJCF for MuJoCo MJX (GPU-batched physics)
     ============================================================
-    Replaces the Isaac Sim USD model.
+    Detailed visual model resembling Boston Dynamics Spot.
     Joint names match spot_isaac_sim/config.py exactly.
     25 mocap obstacle boxes + 5 dynamic mocap cylinders + 1 humanoid mocap body.
     5 camera sites replicate config.py CAMERA_RIG positions.
@@ -12,6 +12,8 @@
   <option timestep="0.005" gravity="0 0 -9.81" integrator="Euler"/>
   <visual>
     <global offwidth="1920" offheight="1080"/>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0.2 0.2 0.2"/>
+    <quality shadowsize="4096"/>
   </visual>
 
   <default>
@@ -19,11 +21,21 @@
     <geom condim="3" friction="0.8 0.02 0.01" rgba="0.6 0.6 0.6 1"/>
     <motor ctrlrange="-3.14 3.14" ctrllimited="true"/>
     <position kp="100" kv="10" ctrlrange="-3.14 3.14" ctrllimited="true"/>
+    <!-- Spot body panels: yellow -->
     <default class="spot_body">
-      <geom type="box" rgba="0.3 0.3 0.35 1"/>
+      <geom type="box" rgba="0.92 0.78 0.15 1"/>
     </default>
+    <!-- Spot body accent panels: dark gray -->
+    <default class="spot_accent">
+      <geom type="box" rgba="0.12 0.12 0.14 1"/>
+    </default>
+    <!-- Spot leg segments: dark charcoal -->
     <default class="spot_leg">
-      <geom type="capsule" rgba="0.25 0.25 0.3 1" size="0.025"/>
+      <geom type="capsule" rgba="0.12 0.12 0.14 1" size="0.025"/>
+    </default>
+    <!-- Spot hip housing: dark gray -->
+    <default class="spot_hip">
+      <geom type="box" rgba="0.15 0.15 0.17 1"/>
     </default>
     <default class="obstacle">
       <geom type="box" rgba="0.7 0.4 0.2 1" condim="3"/>
@@ -38,8 +50,9 @@
   <!-- ================================================================ -->
   <asset>
     <texture name="floor_tex" type="2d" builtin="checker"
-             rgb1="0.6 0.6 0.6" rgb2="0.5 0.5 0.5" width="512" height="512"/>
-    <material name="floor_mat" texture="floor_tex" texrepeat="8 8" reflectance="0.1"/>
+             rgb1="0.45 0.55 0.65" rgb2="0.35 0.45 0.55" width="512" height="512"/>
+    <material name="floor_mat" texture="floor_tex" texrepeat="10 10" reflectance="0.25"
+              specular="0.4" shininess="0.5"/>
     <texture name="wall_tex" type="2d" builtin="flat"
              rgb1="0.85 0.85 0.82" width="128" height="128"/>
     <material name="wall_mat" texture="wall_tex" reflectance="0.05"/>
@@ -50,11 +63,19 @@
   <!-- ================================================================ -->
   <worldbody>
 
+    <!-- Lighting -->
+    <light name="top_light" pos="0 0 6" dir="0 0 -1" diffuse="0.8 0.8 0.8"
+           specular="0.3 0.3 0.3" castshadow="true" cutoff="60"/>
+    <light name="front_fill" pos="4 -4 5" dir="-0.4 0.4 -0.7" diffuse="0.4 0.4 0.5"
+           specular="0.1 0.1 0.1" castshadow="false"/>
+    <light name="back_fill" pos="-3 3 4" dir="0.3 -0.3 -0.6" diffuse="0.25 0.25 0.3"
+           specular="0.05 0.05 0.05" castshadow="false"/>
+
     <!-- Floor -->
     <geom name="floor" type="plane" size="15 15 0.1"
-          material="floor_mat" rgba="0.6 0.6 0.6 1" condim="3"/>
+          material="floor_mat" rgba="0.45 0.55 0.65 1" condim="3"/>
 
-    <!-- Room walls (10×10 m room) — fixed -->
+    <!-- Room walls (10x10 m room) — fixed -->
     <geom name="wall_north" type="box" size="5 0.1 1.5"
           pos="0 5 1.5" material="wall_mat" rgba="0.85 0.85 0.82 1"/>
     <geom name="wall_south" type="box" size="5 0.1 1.5"
@@ -66,7 +87,6 @@
 
     <!-- ============================================================ -->
     <!-- STATIC OBSTACLE MOCAP BODIES (25 max from config)            -->
-    <!-- Positions set each episode via data.mocap_pos                -->
     <!-- ============================================================ -->
     <body name="obstacle_0"  mocap="true" pos="100 0 0.5"><geom class="obstacle" size="0.3 0.3 0.5"/></body>
     <body name="obstacle_1"  mocap="true" pos="100 1 0.5"><geom class="obstacle" size="0.25 0.4 0.4"/></body>
@@ -96,7 +116,6 @@
 
     <!-- ============================================================ -->
     <!-- DYNAMIC OBSTACLE MOCAP BODIES (5 max from config)            -->
-    <!-- Moved each step to simulate walking people / carts           -->
     <!-- ============================================================ -->
     <body name="dynobs_0" mocap="true" pos="100 0 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
     <body name="dynobs_1" mocap="true" pos="100 1 0.85"><geom class="dynamic_obs" size="0.25 0.85"/></body>
@@ -106,65 +125,95 @@
 
     <!-- ============================================================ -->
     <!-- HUMANOID OBSTACLE MOCAP BODY                                  -->
-    <!-- Parked at 100 0 0 by default; placed near goal at reset.     -->
-    <!-- Single rigid mocap body — all geoms move together.           -->
-    <!-- Torso origin at z=1.0 (world); feet reach ~z=0 (floor).     -->
     <!-- ============================================================ -->
     <body name="human_0" mocap="true" pos="100 0 1.0">
-      <!-- torso: vertical capsule, half-length=0.25, radius=0.12 -->
       <geom name="human_0_torso" type="capsule" size="0.12 0.25"
             pos="0 0 0" rgba="0.8 0.6 0.5 1"/>
-      <!-- head: sphere above torso -->
       <geom name="human_0_head" type="sphere" size="0.12"
             pos="0 0 0.42" rgba="0.8 0.6 0.5 1"/>
-      <!-- left upper leg -->
       <geom name="human_0_lul" type="capsule" size="0.07 0.2"
             pos="-0.1 0 -0.45" rgba="0.3 0.3 0.7 1"/>
-      <!-- right upper leg -->
       <geom name="human_0_rul" type="capsule" size="0.07 0.2"
             pos="0.1 0 -0.45" rgba="0.3 0.3 0.7 1"/>
-      <!-- left lower leg -->
       <geom name="human_0_lll" type="capsule" size="0.06 0.2"
             pos="-0.1 0 -0.85" rgba="0.3 0.3 0.7 1"/>
-      <!-- right lower leg -->
       <geom name="human_0_rll" type="capsule" size="0.06 0.2"
             pos="0.1 0 -0.85" rgba="0.3 0.3 0.7 1"/>
     </body>
 
     <!-- ============================================================ -->
     <!-- SPOT ROBOT BODY                                               -->
-    <!-- freejoint: robot can move freely in the world                -->
+    <!-- Detailed visual model with yellow/black Spot appearance       -->
     <!-- ============================================================ -->
     <body name="base_link" pos="0 0 0.5">
       <freejoint name="root"/>
 
-      <!-- Main trunk -->
+      <!-- Main trunk inertial (unchanged for physics) -->
       <inertial pos="0 0 0" mass="14.0"
                 diaginertia="0.11 0.33 0.33"/>
-      <geom name="trunk" class="spot_body" size="0.30 0.15 0.08"/>
+
+      <!-- === TRUNK GEOMETRY (multi-part for visual detail) === -->
+      <!-- Main body - top panel (yellow) -->
+      <geom name="trunk" class="spot_body" size="0.30 0.14 0.045" pos="0 0 0.035"/>
+      <!-- Main body - bottom panel (dark) -->
+      <geom name="trunk_bottom" class="spot_accent" size="0.28 0.13 0.03" pos="0 0 -0.02"
+            contype="0" conaffinity="0"/>
+      <!-- Side panels (yellow, slightly inset) -->
+      <geom name="trunk_side_l" type="box" size="0.25 0.01 0.06" pos="0 0.14 0.01"
+            rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
+      <geom name="trunk_side_r" type="box" size="0.25 0.01 0.06" pos="0 -0.14 0.01"
+            rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
+      <!-- Top accent stripe (black) -->
+      <geom name="trunk_stripe" type="box" size="0.22 0.08 0.005" pos="0 0 0.082"
+            rgba="0.1 0.1 0.1 1" contype="0" conaffinity="0"/>
+      <!-- Rear panel -->
+      <geom name="trunk_rear" type="box" size="0.02 0.12 0.05" pos="-0.30 0 0.01"
+            rgba="0.15 0.15 0.17 1" contype="0" conaffinity="0"/>
+
+      <!-- === HEAD MODULE === -->
+      <!-- Neck connector -->
+      <geom name="neck" type="box" size="0.04 0.06 0.035" pos="0.34 0 0.02"
+            rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+      <!-- Head body (yellow) -->
+      <geom name="head_top" type="box" size="0.07 0.07 0.03" pos="0.42 0 0.03"
+            rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
+      <!-- Head bottom (dark) -->
+      <geom name="head_bottom" type="box" size="0.07 0.065 0.02" pos="0.42 0 -0.01"
+            rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+      <!-- Camera lens array (front face) -->
+      <geom name="head_lens_l" type="cylinder" size="0.015 0.005" pos="0.49 0.03 0.02"
+            euler="0 1.5708 0" rgba="0.05 0.05 0.3 1" contype="0" conaffinity="0"/>
+      <geom name="head_lens_r" type="cylinder" size="0.015 0.005" pos="0.49 -0.03 0.02"
+            euler="0 1.5708 0" rgba="0.05 0.05 0.3 1" contype="0" conaffinity="0"/>
+      <!-- Status LED strip on top -->
+      <geom name="head_led" type="box" size="0.04 0.03 0.003" pos="0.42 0 0.062"
+            rgba="0.1 0.8 0.2 1" contype="0" conaffinity="0"/>
+
+      <!-- === HANDLE on top === -->
+      <geom name="handle_l" type="capsule" size="0.008" fromto="-0.08 0.06 0.08 -0.08 0.06 0.12"
+            rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+      <geom name="handle_r" type="capsule" size="0.008" fromto="-0.08 -0.06 0.08 -0.08 -0.06 0.12"
+            rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+      <geom name="handle_bar" type="capsule" size="0.01" fromto="-0.08 0.06 0.12 -0.08 -0.06 0.12"
+            rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
 
       <!-- ── CAMERA SITES (match config.py CAMERA_RIG exactly) ── -->
-      <!-- front_center: pos=[0.32,0.0,0.05], rot=[0°,-10°,0°] euler xyz -->
       <site name="cam_front_center" pos="0.32 0.0 0.05"
             euler="0 -0.1745 0" size="0.01"/>
       <camera name="depth_front_center" pos="0.32 0.0 0.05"
               euler="0 -0.1745 0" fovy="58" mode="fixed"/>
-      <!-- front_left: pos=[0.20,0.16,0.05], rot=[0°,-10°,70°] -->
       <site name="cam_front_left" pos="0.20 0.16 0.05"
             euler="0 -0.1745 1.2217" size="0.01"/>
       <camera name="depth_front_left" pos="0.20 0.16 0.05"
               euler="0 -0.1745 1.2217" fovy="58" mode="fixed"/>
-      <!-- front_right: pos=[0.20,-0.16,0.05], rot=[0°,-10°,-70°] -->
       <site name="cam_front_right" pos="0.20 -0.16 0.05"
             euler="0 -0.1745 -1.2217" size="0.01"/>
       <camera name="depth_front_right" pos="0.20 -0.16 0.05"
               euler="0 -0.1745 -1.2217" fovy="58" mode="fixed"/>
-      <!-- rear_left: pos=[-0.28,0.14,0.05], rot=[0°,-10°,145°] -->
       <site name="cam_rear_left" pos="-0.28 0.14 0.05"
             euler="0 -0.1745 2.5307" size="0.01"/>
       <camera name="depth_rear_left" pos="-0.28 0.14 0.05"
               euler="0 -0.1745 2.5307" fovy="58" mode="fixed"/>
-      <!-- rear_right: pos=[-0.28,-0.14,0.05], rot=[0°,-10°,-145°] -->
       <site name="cam_rear_right" pos="-0.28 -0.14 0.05"
             euler="0 -0.1745 -2.5307" size="0.01"/>
       <camera name="depth_rear_right" pos="-0.28 -0.14 0.05"
@@ -179,17 +228,35 @@
       <body name="fl_hip" pos="0.29 0.055 0">
         <joint name="fl_hx" type="hinge" axis="1 0 0"
                range="-0.8 0.8" ref="0.0"/>
-        <geom name="fl_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <!-- Hip housing (visible motor block) -->
+        <geom name="fl_hip_geom" class="spot_hip" size="0.04 0.045 0.045"/>
+        <!-- Hip accent (yellow cap) -->
+        <geom name="fl_hip_cap" type="box" size="0.035 0.005 0.04" pos="0 0.05 0"
+              rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
         <body name="fl_upper_leg" pos="0 0.055 0">
           <joint name="fl_hy" type="hinge" axis="0 1 0"
                  range="-0.6 2.4" ref="0.8"/>
-          <geom name="fl_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <!-- Shoulder joint ball -->
+          <geom name="fl_shoulder" type="sphere" size="0.03" pos="0 0 0"
+                rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+          <!-- Upper leg - thicker, structural look -->
+          <geom name="fl_upper" type="capsule" size="0.028" fromto="0 0 0 0 0 -0.25"
+                rgba="0.12 0.12 0.14 1"/>
+          <!-- Upper leg side plate (yellow accent) -->
+          <geom name="fl_upper_plate" type="box" size="0.015 0.008 0.1" pos="0.015 0 -0.12"
+                rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
           <body name="fl_lower_leg" pos="0 0 -0.25">
             <joint name="fl_kn" type="hinge" axis="0 1 0"
                    range="-2.8 -0.5" ref="-1.6"/>
-            <geom name="fl_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
-            <geom name="fl_foot" type="sphere" size="0.02" pos="0 0 -0.25"
-                  rgba="0.1 0.1 0.1 1" condim="6"/>
+            <!-- Knee joint ball -->
+            <geom name="fl_knee" type="sphere" size="0.028" pos="0 0 0"
+                  rgba="0.15 0.15 0.17 1" contype="0" conaffinity="0"/>
+            <!-- Lower leg -->
+            <geom name="fl_lower" type="capsule" size="0.022" fromto="0 0 0 0 0 -0.25"
+                  rgba="0.12 0.12 0.14 1"/>
+            <!-- Foot - rubber pad -->
+            <geom name="fl_foot" type="sphere" size="0.025" pos="0 0 -0.25"
+                  rgba="0.08 0.08 0.08 1" condim="6"/>
           </body>
         </body>
       </body>
@@ -200,17 +267,27 @@
       <body name="fr_hip" pos="0.29 -0.055 0">
         <joint name="fr_hx" type="hinge" axis="1 0 0"
                range="-0.8 0.8" ref="0.0"/>
-        <geom name="fr_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <geom name="fr_hip_geom" class="spot_hip" size="0.04 0.045 0.045"/>
+        <geom name="fr_hip_cap" type="box" size="0.035 0.005 0.04" pos="0 -0.05 0"
+              rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
         <body name="fr_upper_leg" pos="0 -0.055 0">
           <joint name="fr_hy" type="hinge" axis="0 1 0"
                  range="-0.6 2.4" ref="0.8"/>
-          <geom name="fr_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <geom name="fr_shoulder" type="sphere" size="0.03" pos="0 0 0"
+                rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+          <geom name="fr_upper" type="capsule" size="0.028" fromto="0 0 0 0 0 -0.25"
+                rgba="0.12 0.12 0.14 1"/>
+          <geom name="fr_upper_plate" type="box" size="0.015 0.008 0.1" pos="0.015 0 -0.12"
+                rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
           <body name="fr_lower_leg" pos="0 0 -0.25">
             <joint name="fr_kn" type="hinge" axis="0 1 0"
                    range="-2.8 -0.5" ref="-1.6"/>
-            <geom name="fr_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
-            <geom name="fr_foot" type="sphere" size="0.02" pos="0 0 -0.25"
-                  rgba="0.1 0.1 0.1 1" condim="6"/>
+            <geom name="fr_knee" type="sphere" size="0.028" pos="0 0 0"
+                  rgba="0.15 0.15 0.17 1" contype="0" conaffinity="0"/>
+            <geom name="fr_lower" type="capsule" size="0.022" fromto="0 0 0 0 0 -0.25"
+                  rgba="0.12 0.12 0.14 1"/>
+            <geom name="fr_foot" type="sphere" size="0.025" pos="0 0 -0.25"
+                  rgba="0.08 0.08 0.08 1" condim="6"/>
           </body>
         </body>
       </body>
@@ -221,17 +298,27 @@
       <body name="hl_hip" pos="-0.26 0.055 0">
         <joint name="hl_hx" type="hinge" axis="1 0 0"
                range="-0.8 0.8" ref="0.0"/>
-        <geom name="hl_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <geom name="hl_hip_geom" class="spot_hip" size="0.04 0.045 0.045"/>
+        <geom name="hl_hip_cap" type="box" size="0.035 0.005 0.04" pos="0 0.05 0"
+              rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
         <body name="hl_upper_leg" pos="0 0.055 0">
           <joint name="hl_hy" type="hinge" axis="0 1 0"
                  range="-0.6 2.4" ref="0.8"/>
-          <geom name="hl_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <geom name="hl_shoulder" type="sphere" size="0.03" pos="0 0 0"
+                rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+          <geom name="hl_upper" type="capsule" size="0.028" fromto="0 0 0 0 0 -0.25"
+                rgba="0.12 0.12 0.14 1"/>
+          <geom name="hl_upper_plate" type="box" size="0.015 0.008 0.1" pos="0.015 0 -0.12"
+                rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
           <body name="hl_lower_leg" pos="0 0 -0.25">
             <joint name="hl_kn" type="hinge" axis="0 1 0"
                    range="-2.8 -0.5" ref="-1.6"/>
-            <geom name="hl_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
-            <geom name="hl_foot" type="sphere" size="0.02" pos="0 0 -0.25"
-                  rgba="0.1 0.1 0.1 1" condim="6"/>
+            <geom name="hl_knee" type="sphere" size="0.028" pos="0 0 0"
+                  rgba="0.15 0.15 0.17 1" contype="0" conaffinity="0"/>
+            <geom name="hl_lower" type="capsule" size="0.022" fromto="0 0 0 0 0 -0.25"
+                  rgba="0.12 0.12 0.14 1"/>
+            <geom name="hl_foot" type="sphere" size="0.025" pos="0 0 -0.25"
+                  rgba="0.08 0.08 0.08 1" condim="6"/>
           </body>
         </body>
       </body>
@@ -242,17 +329,27 @@
       <body name="hr_hip" pos="-0.26 -0.055 0">
         <joint name="hr_hx" type="hinge" axis="1 0 0"
                range="-0.8 0.8" ref="0.0"/>
-        <geom name="hr_hip_geom" class="spot_body" size="0.04 0.04 0.04"/>
+        <geom name="hr_hip_geom" class="spot_hip" size="0.04 0.045 0.045"/>
+        <geom name="hr_hip_cap" type="box" size="0.035 0.005 0.04" pos="0 -0.05 0"
+              rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
         <body name="hr_upper_leg" pos="0 -0.055 0">
           <joint name="hr_hy" type="hinge" axis="0 1 0"
                  range="-0.6 2.4" ref="0.8"/>
-          <geom name="hr_upper" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
+          <geom name="hr_shoulder" type="sphere" size="0.03" pos="0 0 0"
+                rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0"/>
+          <geom name="hr_upper" type="capsule" size="0.028" fromto="0 0 0 0 0 -0.25"
+                rgba="0.12 0.12 0.14 1"/>
+          <geom name="hr_upper_plate" type="box" size="0.015 0.008 0.1" pos="0.015 0 -0.12"
+                rgba="0.92 0.78 0.15 1" contype="0" conaffinity="0"/>
           <body name="hr_lower_leg" pos="0 0 -0.25">
             <joint name="hr_kn" type="hinge" axis="0 1 0"
                    range="-2.8 -0.5" ref="-1.6"/>
-            <geom name="hr_lower" class="spot_leg" fromto="0 0 0 0 0 -0.25"/>
-            <geom name="hr_foot" type="sphere" size="0.02" pos="0 0 -0.25"
-                  rgba="0.1 0.1 0.1 1" condim="6"/>
+            <geom name="hr_knee" type="sphere" size="0.028" pos="0 0 0"
+                  rgba="0.15 0.15 0.17 1" contype="0" conaffinity="0"/>
+            <geom name="hr_lower" type="capsule" size="0.022" fromto="0 0 0 0 0 -0.25"
+                  rgba="0.12 0.12 0.14 1"/>
+            <geom name="hr_foot" type="sphere" size="0.025" pos="0 0 -0.25"
+                  rgba="0.08 0.08 0.08 1" condim="6"/>
           </body>
         </body>
       </body>
@@ -283,7 +380,6 @@
   <!-- SENSORS                                                           -->
   <!-- ================================================================ -->
   <sensor>
-    <!-- Joint positions (12) -->
     <jointpos name="jpos_fl_hx" joint="fl_hx"/>
     <jointpos name="jpos_fl_hy" joint="fl_hy"/>
     <jointpos name="jpos_fl_kn" joint="fl_kn"/>
@@ -296,7 +392,6 @@
     <jointpos name="jpos_hr_hx" joint="hr_hx"/>
     <jointpos name="jpos_hr_hy" joint="hr_hy"/>
     <jointpos name="jpos_hr_kn" joint="hr_kn"/>
-    <!-- Joint velocities (12) -->
     <jointvel name="jvel_fl_hx" joint="fl_hx"/>
     <jointvel name="jvel_fl_hy" joint="fl_hy"/>
     <jointvel name="jvel_fl_kn" joint="fl_kn"/>
@@ -309,7 +404,6 @@
     <jointvel name="jvel_hr_hx" joint="hr_hx"/>
     <jointvel name="jvel_hr_hy" joint="hr_hy"/>
     <jointvel name="jvel_hr_kn" joint="hr_kn"/>
-    <!-- IMU -->
     <framequat  name="imu_quat"   objtype="site" objname="imu"/>
     <framelinvel name="imu_linvel" objtype="site" objname="imu"/>
     <frameangvel name="imu_angvel" objtype="site" objname="imu"/>
