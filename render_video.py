@@ -26,10 +26,20 @@ from jax_ppo import (
 )
 import flax.linen as nn
 
-# Joint limits (must match mjx_nav_env.py)
-JOINT_LOWER = np.array([-0.8, -0.6, -2.8] * 4, dtype=np.float32)
-JOINT_UPPER = np.array([0.8, 2.4, -0.5] * 4, dtype=np.float32)
-STANDING_POSE = np.array([0.0, 0.8, -1.6] * 4, dtype=np.float32)
+# Joint limits (must match mjx_nav_env.py — real Spot SDK values)
+JOINT_LOWER = np.array([
+    -0.785398, -0.898845, -2.7929,   # fl
+    -0.785398, -0.898845, -2.7929,   # fr
+    -0.785398, -0.898845, -2.7929,   # hl
+    -0.785398, -0.898845, -2.7929,   # hr
+], dtype=np.float32)
+JOINT_UPPER = np.array([
+     0.785398,  2.29511,  -0.254402, # fl
+     0.785398,  2.24363,  -0.255648, # fr
+     0.785398,  2.29511,  -0.247067, # hl
+     0.785398,  2.29511,  -0.248282, # hr
+], dtype=np.float32)
+STANDING_POSE = np.array([0.0, 1.04, -1.8] * 4, dtype=np.float32)
 
 ROOM_HALF = 4.5
 MAX_STEPS = 250
@@ -220,7 +230,7 @@ def main():
         # Set robot position
         mj_data.qpos[0] = robot_xy[0]
         mj_data.qpos[1] = robot_xy[1]
-        mj_data.qpos[2] = 0.52  # standing height
+        mj_data.qpos[2] = 0.46  # standing height (real Spot)
         mj_data.qpos[3] = np.cos(robot_yaw / 2)
         mj_data.qpos[4:6] = 0.0
         mj_data.qpos[6] = np.sin(robot_yaw / 2)
