@@ -134,6 +134,13 @@ class SpotMJXEnv:
             partial(self._single_physics_step, self._mx)
         ))
 
+        # ── Cache MJX data template for fast reset ──────────────────
+        # Creating mujoco.MjData + mjx.put_data on CPU is expensive (~ms).
+        # auto_reset calls reset() every step (2048×/rollout), so caching
+        # this template avoids 2048 CPU-side MuJoCo constructions per rollout.
+        _mj_data = mujoco.MjData(self._mj_model)
+        self._dx_template = mjx.put_data(self._mj_model, _mj_data)
+
         # ── Obs / action space info ───────────────────────────────────
         self.obs_depth_shape = (n_envs, N_CAMS, CAM_H, CAM_W)
         self.obs_proprio_dim = 37
@@ -157,12 +164,11 @@ class SpotMJXEnv:
         rng, *sub = jax.random.split(rng, self.n_envs + 1)
         sub = jnp.stack(sub)   # (n_envs, 2)
 
-        # Build batch of initial MJX data
-        mj_data = mujoco.MjData(self._mj_model)
-        dx_single = mjx.put_data(self._mj_model, mj_data)
-        dx_batch  = jax.tree_util.tree_map(
+        # Build batch of initial MJX data from cached template (no CPU-side
+        # mujoco.MjData construction — saves ~ms per call, 2048× per rollout)
+        dx_batch = jax.tree_util.tree_map(
             lambda x: jnp.broadcast_to(x, (self.n_envs,) + x.shape),
-            dx_single,
+            self._dx_template,
         )
 
         # Randomize robot start positions and orientations

@@ -20,6 +20,8 @@ PPO references match config.py TRAINING hyperparameters:
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5
 """
 
+import time
+
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -394,7 +396,7 @@ class PPOTrainer:
         )
 
     # ──────────────────────────────────────────────────────────────────
-    def collect_rollout(self, env, state, obs):
+    def collect_rollout(self, env, state, obs, profile=False):
         """
         Collect n_steps of experience. Returns updated state/obs, batch, and
         rollout stats dict (mean/min/max reward, done rate, episode count).
@@ -409,10 +411,26 @@ class PPOTrainer:
         buf_rewards  = []
         buf_dones    = []
         buf_values   = []
-        buf_reward_info = []   # per-step reward component dicts
+
+        # Running sums for reward components (avoids storing 2048 dicts)
+        reward_sums = None
+        reward_count = 0
+
+        # Optional per-component timing
+        t_inference = 0.0
+        t_env_step  = 0.0
+        t_auto_reset = 0.0
 
         for _ in range(self.n_steps):
+            if profile:
+                t0 = time.time()
+
             action, log_prob, value, cnn_feat = self._sample_action(obs)
+
+            if profile:
+                jax.block_until_ready(action)
+                t_inference += time.time() - t0
+                t0 = time.time()
 
             # Sanitize features: replace NaN/inf with 0 before storing
             cnn_feat = jnp.where(jnp.isfinite(cnn_feat), cnn_feat, 0.0)
@@ -424,22 +442,40 @@ class PPOTrainer:
 
             state, obs, reward, done, step_info = env.step(state, action)
 
+            if profile:
+                jax.block_until_ready(reward)
+                t_env_step += time.time() - t0
+                t0 = time.time()
+
             buf_rewards.append(reward)
             buf_dones.append(done.astype(jnp.float32))
-            buf_reward_info.append(step_info)
+
+            # Accumulate reward component running sums instead of buffering all dicts
+            if reward_sums is None:
+                reward_sums = {k: v for k, v in step_info.items()}
+            else:
+                reward_sums = {k: reward_sums[k] + v for k, v in step_info.items()}
+            reward_count += 1
 
             # Auto-reset: immediately replace terminated envs with fresh ones
             self.rng, k = jax.random.split(self.rng)
             state, obs = env.auto_reset(state, obs, done, k)
 
+            if profile:
+                jax.block_until_ready(obs["proprio"])
+                t_auto_reset += time.time() - t0
+
         # Bootstrap value for last step
         _, _, last_value, _ = self._sample_action(obs)
+
+        t_gae = time.time()
 
         # Stack: (T, B, ...)
         rewards = jnp.stack(buf_rewards)     # (T, B)
         dones   = jnp.stack(buf_dones)       # (T, B)
+        stacked_values = jnp.stack(buf_values)  # (T, B) — reused below
         values  = jnp.concatenate(
-            [jnp.stack(buf_values), last_value[None]], axis=0   # (T+1, B)
+            [stacked_values, last_value[None]], axis=0   # (T+1, B)
         )
 
         advantages, returns = compute_gae(rewards, values, dones)
@@ -448,9 +484,8 @@ class PPOTrainer:
         # value clipping (old_value ± CLIP_EPS) operates in normalized space.
         ret_mean = returns.mean()
         ret_std  = returns.std() + 1e-8
-        returns_norm   = (returns        - ret_mean) / ret_std
-        old_values_raw = jnp.stack(buf_values)           # (T, B) — collected values
-        old_values_norm = (old_values_raw - ret_mean) / ret_std
+        returns_norm    = (returns         - ret_mean) / ret_std
+        old_values_norm = (stacked_values  - ret_mean) / ret_std
 
         # Flatten (T*B, ...)
         def flat(x):
@@ -464,15 +499,21 @@ class PPOTrainer:
         adv_std  = adv_flat.std() + 1e-8
         adv_norm = (adv_flat - adv_mean) / adv_std
 
+        # Stack observation buffers once — reused for batch and diagnostics
+        stacked_cnn_feat = jnp.stack(buf_cnn_feat)  # (T, B, 256)
+        stacked_proprio  = jnp.stack(buf_proprio)    # (T, B, 37)
+
         batch = RolloutBatch(
-            cnn_feat   = flat(jnp.stack(buf_cnn_feat)),  # (T*B, 256)
-            proprio    = flat(jnp.stack(buf_proprio)),
+            cnn_feat   = flat(stacked_cnn_feat),
+            proprio    = flat(stacked_proprio),
             action     = flat(jnp.stack(buf_actions)),
             log_prob   = flat(jnp.stack(buf_log_prob)),
             advantage  = adv_norm,
             ret        = flat(returns_norm),
             old_value  = flat(old_values_norm),
         )
+
+        t_gae_end = time.time()
 
         # One device→host sync HERE (after the loop), not inside the loop
         rollout_stats = {
@@ -484,7 +525,7 @@ class PPOTrainer:
         }
 
         # ── Rollout diagnostics ────────────────────────────────────────
-        raw_values = jnp.stack(buf_values)                      # (T, B)
+        # Reuse stacked_values, stacked_proprio, stacked_cnn_feat (no redundant stacking)
         rollout_stats["_diag"] = {
             # Raw returns (before normalization)
             "ret_raw_mean":      float(returns.mean()),
@@ -505,29 +546,41 @@ class PPOTrainer:
             "adv_min":           float(advantages.min()),
             "adv_max":           float(advantages.max()),
             # Value predictions (raw, before normalization)
-            "val_raw_mean":      float(raw_values.mean()),
-            "val_raw_std":       float(raw_values.std()),
-            "val_raw_min":       float(raw_values.min()),
-            "val_raw_max":       float(raw_values.max()),
+            "val_raw_mean":      float(stacked_values.mean()),
+            "val_raw_std":       float(stacked_values.std()),
+            "val_raw_min":       float(stacked_values.min()),
+            "val_raw_max":       float(stacked_values.max()),
             # Explained variance: how well values predict returns
-            "explained_var":     float(1.0 - jnp.var(returns - raw_values)
+            "explained_var":     float(1.0 - jnp.var(returns - stacked_values)
                                        / (jnp.var(returns) + 1e-8)),
-            # Observation health
-            "proprio_mean":      float(jnp.stack(buf_proprio).mean()),
-            "proprio_std":       float(jnp.stack(buf_proprio).std()),
-            "proprio_nan_frac":  float(jnp.mean(~jnp.isfinite(jnp.stack(buf_proprio)))),
-            "cnn_feat_mean":     float(jnp.stack(buf_cnn_feat).mean()),
-            "cnn_feat_std":      float(jnp.stack(buf_cnn_feat).std()),
-            "cnn_feat_nan_frac": float(jnp.mean(~jnp.isfinite(jnp.stack(buf_cnn_feat)))),
+            # Observation health (reuse pre-stacked arrays)
+            "proprio_mean":      float(stacked_proprio.mean()),
+            "proprio_std":       float(stacked_proprio.std()),
+            "proprio_nan_frac":  float(jnp.mean(~jnp.isfinite(stacked_proprio))),
+            "cnn_feat_mean":     float(stacked_cnn_feat.mean()),
+            "cnn_feat_std":      float(stacked_cnn_feat.std()),
+            "cnn_feat_nan_frac": float(jnp.mean(~jnp.isfinite(stacked_cnn_feat))),
         }
 
-        # Aggregate reward components across timesteps (mean over T and B)
-        if buf_reward_info:
-            reward_components = {}
-            for key in buf_reward_info[0]:
-                vals = jnp.stack([info[key] for info in buf_reward_info])  # (T, B)
-                reward_components[key] = float(vals.mean())
+        t_diag_end = time.time()
+
+        # Aggregate reward components from running sums (no per-step stacking)
+        if reward_sums is not None and reward_count > 0:
+            reward_components = {
+                k: float(v.mean() / reward_count) for k, v in reward_sums.items()
+            }
             rollout_stats["_diag"]["reward_components"] = reward_components
+
+        # Attach timing info when profiling
+        if profile:
+            rollout_stats["_timing"] = {
+                "inference_sec":  t_inference,
+                "env_step_sec":   t_env_step,
+                "auto_reset_sec": t_auto_reset,
+                "gae_batch_sec":  t_gae_end - t_gae,
+                "diag_sec":       t_diag_end - t_gae_end,
+            }
+
         return state, obs, batch, rollout_stats
 
     # ──────────────────────────────────────────────────────────────────
