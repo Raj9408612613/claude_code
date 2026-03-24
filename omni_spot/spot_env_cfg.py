@@ -190,7 +190,129 @@ if HAS_ISAAC:
             ),
         )
 
-
+        # ── Walls (4 axis-aligned boxes enclosing 10x10m room) ────────
+        wall_north = AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/Walls/north",
+            spawn=sim_utils.CuboidCfg(
+                size=(10.0, 0.2, 3.0),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 5.0, 1.5)),
+        )
+        wall_south = AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/Walls/south",
+            spawn=sim_utils.CuboidCfg(
+                size=(10.0, 0.2, 3.0),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, -5.0, 1.5)),
+        )
+        wall_east = AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/Walls/east",
+            spawn=sim_utils.CuboidCfg(
+                size=(0.2, 10.0, 3.0),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(5.0, 0.0, 1.5)),
+        )
+        wall_west = AssetBaseCfg(
+            prim_path="{ENV_REGEX_NS}/Walls/west",
+            spawn=sim_utils.CuboidCfg(
+                size=(0.2, 10.0, 3.0),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(-5.0, 0.0, 1.5)),
+        )
+ 
+        # ── Obstacle rigid bodies (25 static boxes + 5 dynamic + 1 humanoid) ──
+        # Each is a kinematic rigid body (position-controlled, not simulated).
+        # Positions are set from SpotNavEnv._obs_pos each step.
+        # Spawned at off-scene (100, 0, 0.5) — moved into room on reset.
+ 
+    # Build obstacle configs programmatically from OBS_HALF_SIZES
+    def _build_obstacle_cfgs():
+        """Generate RigidObjectCfg for each obstacle."""
+        cfgs = {}
+        for i in range(N_STATIC):
+            hs = OBS_HALF_SIZES[i]
+            cfgs[f"obs_static_{i:02d}"] = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Obstacles/" + f"static_{i:02d}",
+                spawn=sim_utils.CuboidCfg(
+                    size=(hs[0] * 2, hs[1] * 2, hs[2] * 2),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        kinematic_enabled=True,
+                    ),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.8, 0.4, 0.2),
+                    ),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(100.0, 0.0, hs[2]),
+                ),
+            )
+        for i in range(N_DYNAMIC):
+            idx = N_STATIC + i
+            hs = OBS_HALF_SIZES[idx]
+            cfgs[f"obs_dynamic_{i:02d}"] = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Obstacles/" + f"dynamic_{i:02d}",
+                spawn=sim_utils.CylinderCfg(
+                    radius=hs[0],
+                    height=hs[2] * 2,
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        kinematic_enabled=True,
+                    ),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.2, 0.6, 0.8),
+                    ),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(100.0, 0.0, hs[2]),
+                ),
+            )
+        # Humanoid (approximated as a tall capsule/box)
+        hs = OBS_HALF_SIZES[N_STATIC + N_DYNAMIC]
+        cfgs["obs_humanoid"] = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/Obstacles/humanoid",
+            spawn=sim_utils.CapsuleCfg(
+                radius=hs[0],
+                height=hs[2] * 2 - hs[0] * 2,  # capsule height excludes end caps
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    kinematic_enabled=True,
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.9, 0.3, 0.3),
+                ),
+            ),
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(100.0, 0.0, HUMANOID_OBSTACLE["mocap_z"]),
+            ),
+        )
+        return cfgs
+ 
+    # Attach obstacle configs to scene class
+    _obs_cfgs = _build_obstacle_cfgs()
+    for _name, _cfg in _obs_cfgs.items():
+        setattr(SpotSceneCfg, _name, _cfg)
+ 
+    # ── Contact sensor on robot (detects collisions with obstacles) ────
+    SpotSceneCfg.contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
+        update_period=0.0,   # every physics step
+        history_length=1,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Obstacles/.*"],
+    )
+ 
     # ════════════════════════════════════════════════════════════════════════
     # ENVIRONMENT CONFIG
     # ════════════════════════════════════════════════════════════════════════
