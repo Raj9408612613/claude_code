@@ -1,0 +1,218 @@
+================================================================================
+AGENT CONTEXT — Spot MJX Navigation RL Codebase
+================================================================================
+Generated: 2026-03-24 | Branch: claude/investigate-gpu-memory-nqprE
+Repo: /home/user/claude_code
+
+================================================================================
+1. WHAT THIS IS
+================================================================================
+GPU-batched RL training for Boston Dynamics Spot robot navigation.
+Stack: MuJoCo MJX (physics) + JAX (compute) + Warp (depth rendering) + Flax (NN)
+Replaces prior Isaac Sim implementation. All hot-path ops run on GPU.
+
+================================================================================
+2. FILE MAP
+================================================================================
+mjx_train.py          Main loop: env.reset → collect_rollout → ppo_update → log
+mjx_nav_env.py        SpotMJXEnv: batched reset/step/auto_reset, Warp rendering
+jax_ppo.py            PPOTrainer, SpotActorCritic (CNN+MLP), GAE, ppo_update
+jax_reward.py         compute_reward (10 components), check_termination
+warp_cameras.py       WarpDepthRenderer: raycast_kernel + noise_kernel via DLPack
+ppo_diagnostics.py    print_diagnostics: returns, values, gradients, obs health
+config.py             HUMANOID_OBSTACLE dict (speed, patrol_radius, etc.)
+dynamic_obstacles.py  CPU-side HumanoidObstacle class (single-env/testing only)
+render_video.py       Evaluate checkpoint → MP4 via CPU MuJoCo renderer
+models/spot_scene.xml MuJoCo scene (Spot from Menagerie + room + obstacles)
+
+================================================================================
+3. ARCHITECTURE FLOW
+================================================================================
+Training loop (mjx_train.py:main):
+  env = SpotMJXEnv(n_envs=512)
+  state, obs = env.reset(rng)
+  for update in range(total_updates):         # default 500
+    state, obs, batch, stats = trainer.collect_rollout(env, state, obs)
+    info = trainer.update(batch)               # 4 PPO epochs, minibatch=512
+
+Rollout collection (jax_ppo.py:collect_rollout):
+  for _ in range(n_steps):                     # default 2048
+    action, log_prob, value, cnn_feat = _inference_step(params, depth, proprio, rng)
+    state, obs, reward, done, info = env.step(state, action)
+    state, obs = env.auto_reset(state, obs, done, rng)
+  # GAE → normalize advantages/returns → build RolloutBatch
+
+Env step (mjx_nav_env.py:step):
+  denormalize action → ctrl
+  4× physics substeps: dx = jax.vmap(mjx.step)(mx, dx)
+  update humanoid patrol position
+  compute_reward() → check_termination()
+  _get_obs(): Warp depth render + proprioception vector
+
+================================================================================
+4. SPACES
+================================================================================
+Obs depth:  (B, 5, 120, 160) f32  — 5 cameras, Warp GPU raycast
+Obs proprio: (B, 37) f32           — joints/12, vels/12, quat/4, linv/3, angv/3, goal_dir/2, goal_dist/1
+Action:      (B, 12) f32 in [-1,1] — normalized joint position targets
+State dict keys: dx, mocap_pos, goal_pos, step_count, prev_dist, prev_action,
+                 human_pos, human_wp_idx, human_t
+
+================================================================================
+5. NETWORK
+================================================================================
+DepthCNNEncoder: (B,5,120,160) → Conv8x8/4→32 → Conv4x4/2→64 → Conv3x3/1→64 → Dense(256) [ELU]
+PropriEncoder:   (B,37) → Dense(128) → Dense(64) [ELU]
+Trunk:           concat(256+64=320) → Dense(256) → Dense(128) [ELU]
+Actor:           Dense(12), clip[-2,2], + learnable log_std clamped[-5,2]
+Critic:          Dense(64) → Dense(1), orthogonal init(0.01)
+
+Key optimization: rollout stores CNN features (B,256) not raw depth (B,5,120,160)
+  Memory: ~1 GB vs ~374 GB for 512 envs × 2048 steps
+
+================================================================================
+6. HYPERPARAMETERS
+================================================================================
+PPO: gamma=0.99, gae_lambda=0.95, clip=0.2, ent_coef=0.01, vf_coef=0.5,
+     max_grad_norm=0.5, lr=3e-4, epochs=4, minibatch=512, KL_target=0.03
+Physics: dt=0.005s (200Hz), substeps=4, control@50Hz
+Reward: goal_bonus=200, progress=5, collision=-10, near_coll=-2,
+        upright=-1, height=-3, energy=-0.005, smooth=-0.002, alive=0.5, heading=0.3
+Room: 10×10m, obstacles: 25 static + 5 dynamic + 1 humanoid
+Termination: fallen(h<0.2 or tilt>60°), goal reached(<0.5m), timeout(1000 steps)
+
+================================================================================
+7. RECENT FIXES APPLIED (this branch)
+================================================================================
+
+FIX A — _dx_template caching (mjx_nav_env.py lines 137-142, 167-172)
+------------------------------------------------------------------------
+PROBLEM: reset() was called every step via auto_reset (2048×/rollout).
+Each call did: mujoco.MjData() [CPU] → mjx.put_data() [CPU→GPU transfer].
+This created a CPU→GPU sync barrier every step, stalling the GPU pipeline.
+Cost: ~0.8ms/step × 2048 = ~1.6s wasted per rollout.
+
+FIX: Cache the blank MJX state once in __init__:
+  self._dx_template = mjx.put_data(self._mj_model, mujoco.MjData(self._mj_model))
+reset() now just broadcasts the cached GPU-resident template:
+  dx_batch = jax.tree_util.tree_map(
+      lambda x: jnp.broadcast_to(x, (self.n_envs,) + x.shape),
+      self._dx_template)  # GPU-only, ~0.01ms, no sync
+Savings: ~1.56s/rollout eliminated.
+
+_dx_template IS: a pytree of JAX arrays on GPU containing default qpos, qvel,
+ctrl, xpos, xmat, site_xpos, site_xmat, mocap_pos, etc. — every field of
+MuJoCo's simulation state at t=0 with default values. It's the "factory reset"
+snapshot that gets broadcast to B envs then overwritten with randomized values.
+
+FIX B — Redundant jnp.stack elimination (jax_ppo.py lines 503-504, 529-562)
+------------------------------------------------------------------------
+PROBLEM: Diagnostic code was calling jnp.stack(buf_proprio) 3 separate times
+and jnp.stack(buf_cnn_feat) 3 times, plus redundantly stacking buf_values.
+Each stack allocates a new GPU array. 7 redundant allocations total.
+
+FIX: Stack each buffer once, reuse the reference:
+  stacked_proprio  = jnp.stack(buf_proprio)   # (T, B, 37)  — once
+  stacked_cnn_feat = jnp.stack(buf_cnn_feat)  # (T, B, 256) — once
+  # All diagnostics reference stacked_proprio, stacked_cnn_feat, stacked_values
+
+FIX C — GPU memory reporting (mjx_train.py lines 29-32, 179-191)
+------------------------------------------------------------------------
+PROBLEM: JAX pre-allocates 90% of GPU VRAM by default. nvidia-smi shows ~70 GB
+"used" on an 80 GB GPU even if actual tensor usage is <2 GB.
+
+FIX: Set at startup before JAX import:
+  os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+  os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+Added report_gpu_memory() helper using jax.devices().memory_stats().
+
+Expected actual memory: 128 envs ~1 GB, 512 envs ~3 GB, 4096 envs ~25 GB.
+
+================================================================================
+8. DATA FLOW — CPU vs GPU
+================================================================================
+CPU-side (Python interpreter):
+  - Loop control (2048 iterations)
+  - Kernel dispatch (each JAX/Warp op is a GPU kernel launch from CPU)
+  - Logging (float() calls → device-to-host transfer, AFTER rollout)
+  - Checkpoint save (jax.device_get → pickle)
+
+GPU-side (all hot-path compute):
+  - _inference_step: CNN encode + trunk + sample (single JIT dispatch)
+  - env.step: vmap(mjx.step) × 4 substeps + reward + termination
+  - Warp render: raycast_kernel + noise_kernel via DLPack (zero-copy)
+  - auto_reset: broadcast _dx_template + randomize + jnp.where
+  - ppo_update: loss_fn + grad + optax apply (JIT-compiled)
+
+Sync points (intentional, minimal):
+  1. After rollout loop: float() on stats → device-to-host for logging
+  2. Checkpoint save: jax.device_get(params)
+  3. Profile mode: jax.block_until_ready() for timing accuracy
+
+================================================================================
+9. KEY IMPLEMENTATION DETAILS
+================================================================================
+auto_reset (mjx_nav_env.py:479-535):
+  - Called every step, resets terminated envs in-place via jnp.where
+  - compute_obs=False skips Warp render (next step overwrites anyway)
+  - Merges ALL state fields including dx (physics), mocap_pos, humanoid state
+  - The _pick() helper broadcasts (B,) terminated mask to match any leaf shape
+
+Reward sanitization (jax_reward.py):
+  - Individual components clipped before summing
+  - Total clipped to [-20, 210] (preserves 200-point goal bonus)
+  - NaN/inf → 0
+
+Physics safety (mjx_nav_env.py:step):
+  - Actions: clip[-1,1], NaN→0
+  - Robot state: isfinite check, clip to ±50 (pos) / ±100 (vel)
+  - is_healthy: height∈[0.2,1.5] AND all proprio finite
+  - Terminates unhealthy envs to prevent physics explosion propagation
+
+PPO safety (jax_ppo.py):
+  - Log-ratio clamped [-10,10] before exp
+  - Advantages clipped [-5,5]
+  - NaN gradients → 0
+  - Total loss clamped [-1e6, 1e6]
+  - KL early stopping at 0.03
+
+================================================================================
+10. REMAINING BOTTLENECK — PYTHON LOOP
+================================================================================
+The 2048-iteration Python loop in collect_rollout is the primary remaining
+bottleneck. Each iteration dispatches ~6 GPU kernels from Python:
+  1. _inference_step (1 JIT dispatch)
+  2. env.step → 4× mjx.step + reward + termination
+  3. Warp render (2 kernel launches)
+  4. auto_reset (broadcast + where)
+
+Each dispatch has ~10-50µs Python overhead. At 2048 steps: ~100-200ms of pure
+Python dispatch overhead per rollout. GPU utilization is likely <50% because
+kernels finish faster than Python can dispatch the next one.
+
+Potential fix: jax.lax.scan to fuse the entire rollout into a single JIT.
+Blocker: Warp rendering is not JAX-traceable (opaque CUDA kernels).
+Options: (a) JAX-native renderer, (b) Warp callback via jax.experimental.io,
+(c) accept Python loop overhead as cost of Warp integration.
+
+================================================================================
+11. COMMANDS
+================================================================================
+# Full training
+python mjx_train.py --n_envs 512 --n_steps 2048 --total_updates 500
+
+# Smoke test
+python mjx_train.py --n_envs 64 --n_steps 128 --total_updates 5 --log_interval 1
+
+# With profiling (first N updates get per-component timing)
+python mjx_train.py --n_envs 512 --n_steps 512 --total_updates 10 --profile 5
+
+# Resume from checkpoint
+python mjx_train.py --resume checkpoints/{run_id}/best.pkl
+
+# Render evaluation video
+python render_video.py --ckpt checkpoints/{run_id}/best.pkl --out eval.mp4
+
+================================================================================
+END OF CONTEXT
+================================================================================
