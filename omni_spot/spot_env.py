@@ -1,0 +1,316 @@
+"""
+Isaac Lab DirectRLEnv — Spot Navigation
+=========================================
+Replaces mjx_nav_env.py. Uses PhysX 5 (GPU) for physics and
+Isaac Sim RTX cameras for depth rendering.
+
+This is the main environment class that Isaac Lab's training loop interacts with.
+"""
+
+from __future__ import annotations
+
+import math
+import torch
+
+from .config import (
+    JOINT_LOWER, JOINT_UPPER, STANDING_POSE, TARGET_HEIGHT,
+    N_CAMS, CAM_H, CAM_W, MIN_DEPTH, MAX_DEPTH,
+    N_OBS, N_STATIC, N_DYNAMIC,
+    ROOM_HALF, HUMANOID_OBSTACLE, PROPRIO_DIM, ACTION_DIM,
+)
+from .reward import compute_reward, check_termination
+
+try:
+    from omni.isaac.lab.envs import DirectRLEnv
+    from .spot_env_cfg import SpotNavEnvCfg
+    HAS_ISAAC = True
+except ImportError:
+    HAS_ISAAC = False
+
+
+if HAS_ISAAC:
+
+    class SpotNavEnv(DirectRLEnv):
+        """
+        Batched Spot navigation environment for Isaac Lab.
+
+        Observations:
+            depth:  (num_envs, 5, 120, 160) from RTX cameras
+            proprio: (num_envs, 37) proprioception
+
+        Actions:
+            (num_envs, 12) normalized joint position targets in [-1, 1]
+        """
+
+        cfg: SpotNavEnvCfg
+
+        def __init__(self, cfg: SpotNavEnvCfg, **kwargs):
+            super().__init__(cfg, **kwargs)
+
+            # Cache joint limit tensors on device
+            self._joint_lower = torch.tensor(
+                JOINT_LOWER, device=self.device, dtype=torch.float32
+            )
+            self._joint_upper = torch.tensor(
+                JOINT_UPPER, device=self.device, dtype=torch.float32
+            )
+            self._joint_mid   = (self._joint_upper + self._joint_lower) / 2.0
+            self._joint_range = (self._joint_upper - self._joint_lower) / 2.0
+
+            # Goal positions (randomized per env on reset)
+            self._goal_pos = torch.zeros(
+                self.num_envs, 2, device=self.device
+            )
+            # Previous distance to goal (for progress reward)
+            self._prev_dist = torch.zeros(self.num_envs, device=self.device)
+            # Previous action (for smoothness reward)
+            self._prev_action = torch.zeros(
+                self.num_envs, ACTION_DIM, device=self.device
+            )
+            # Step counter
+            self._step_count = torch.zeros(
+                self.num_envs, device=self.device, dtype=torch.int32
+            )
+
+            # Humanoid patrol state
+            self._human_pos = torch.zeros(self.num_envs, 2, device=self.device)
+            self._human_wp_idx = torch.zeros(
+                self.num_envs, device=self.device, dtype=torch.int32
+            )
+
+        # ── Reset ────────────────────────────────────────────────────
+        def _reset_idx(self, env_ids: torch.Tensor):
+            """Reset selected environments."""
+            super()._reset_idx(env_ids)
+            n = len(env_ids)
+
+            # Randomize robot position
+            robot_xy = torch.empty(n, 2, device=self.device).uniform_(
+                -ROOM_HALF, ROOM_HALF
+            )
+            robot_yaw = torch.empty(n, device=self.device).uniform_(
+                0.0, 2 * math.pi
+            )
+
+            # Randomize goal (2-6m from robot)
+            goal_dist = torch.empty(n, device=self.device).uniform_(2.0, 6.0)
+            goal_ang  = torch.empty(n, device=self.device).uniform_(
+                0.0, 2 * math.pi
+            )
+            goal_xy = robot_xy + torch.stack([
+                goal_dist * torch.cos(goal_ang),
+                goal_dist * torch.sin(goal_ang),
+            ], dim=-1)
+            goal_xy = torch.clamp(goal_xy, -ROOM_HALF, ROOM_HALF)
+
+            # Set robot root state
+            root_state = self.scene["robot"].data.default_root_state[env_ids].clone()
+            root_state[:, 0] = robot_xy[:, 0]   # x
+            root_state[:, 1] = robot_xy[:, 1]   # y
+            root_state[:, 2] = TARGET_HEIGHT     # z
+            # Quaternion from yaw: [w, x, y, z] = [cos(y/2), 0, 0, sin(y/2)]
+            root_state[:, 3] = torch.cos(robot_yaw / 2)  # qw
+            root_state[:, 4] = 0.0                         # qx
+            root_state[:, 5] = 0.0                         # qy
+            root_state[:, 6] = torch.sin(robot_yaw / 2)  # qz
+            self.scene["robot"].write_root_state_to_sim(root_state, env_ids)
+
+            # Set joint positions to standing pose
+            joint_pos = torch.tensor(
+                STANDING_POSE, device=self.device, dtype=torch.float32
+            ).unsqueeze(0).expand(n, -1)
+            joint_vel = torch.zeros(n, ACTION_DIM, device=self.device)
+            self.scene["robot"].write_joint_state_to_sim(
+                joint_pos, joint_vel, env_ids=env_ids
+            )
+
+            # Update goal and tracking state
+            self._goal_pos[env_ids] = goal_xy
+            self._prev_dist[env_ids] = torch.linalg.norm(
+                goal_xy - robot_xy, dim=-1
+            )
+            self._prev_action[env_ids] = 0.0
+            self._step_count[env_ids] = 0
+
+            # Humanoid init near goal
+            patrol_r = HUMANOID_OBSTACLE["patrol_radius"]
+            self._human_pos[env_ids, 0] = torch.clamp(
+                goal_xy[:, 0] + patrol_r, -ROOM_HALF, ROOM_HALF
+            )
+            self._human_pos[env_ids, 1] = torch.clamp(
+                goal_xy[:, 1], -ROOM_HALF, ROOM_HALF
+            )
+            self._human_wp_idx[env_ids] = 0
+
+        # ── Observations ─────────────────────────────────────────────
+        def _get_observations(self) -> dict:
+            """Build observation dict with depth + proprio."""
+            robot = self.scene["robot"]
+
+            # ── Depth from RTX cameras ───────────────────────────────
+            cam_names = [
+                "cam_front_center", "cam_front_left", "cam_front_right",
+                "cam_rear_left", "cam_rear_right",
+            ]
+            depth_list = []
+            for name in cam_names:
+                cam = self.scene[name]
+                # distance_to_camera: (num_envs, H, W, 1) -> (num_envs, 1, H, W)
+                d = cam.data.output["distance_to_camera"]
+                d = d.permute(0, 3, 1, 2)  # channels first
+                d = torch.clamp(d, MIN_DEPTH, MAX_DEPTH)
+                depth_list.append(d)
+
+            depth = torch.cat(depth_list, dim=1)  # (num_envs, 5, H, W)
+
+            # ── Proprioception (37-dim) ──────────────────────────────
+            root_pos  = robot.data.root_pos_w           # (B, 3)
+            root_quat = robot.data.root_quat_w          # (B, 4) [w,x,y,z]
+            root_linv = robot.data.root_lin_vel_w       # (B, 3)
+            root_angv = robot.data.root_ang_vel_w       # (B, 3)
+            joint_pos = robot.data.joint_pos             # (B, 12)
+            joint_vel = robot.data.joint_vel             # (B, 12)
+
+            # Goal direction and distance
+            goal_diff = self._goal_pos - root_pos[:, :2]
+            goal_dist = torch.linalg.norm(
+                goal_diff, dim=-1, keepdim=True
+            )
+            goal_dir = goal_diff / (goal_dist + 1e-8)
+
+            # Scale to ~[-1, 1] range (same scaling as JAX version)
+            proprio = torch.cat([
+                joint_pos / 3.14,       # 12
+                joint_vel / 20.0,       # 12
+                root_quat,              # 4
+                root_linv / 5.0,        # 3
+                root_angv / 10.0,       # 3
+                goal_dir,               # 2
+                goal_dist / 5.0,        # 1
+            ], dim=-1)                  # 37-dim
+
+            # Sanitize
+            proprio = torch.where(
+                torch.isfinite(proprio), proprio, torch.zeros_like(proprio)
+            )
+            proprio = torch.clamp(proprio, -10.0, 10.0)
+
+            return {"depth": depth, "proprio": proprio}
+
+        # ── Actions ──────────────────────────────────────────────────
+        def _pre_physics_step(self, actions: torch.Tensor):
+            """Convert normalized [-1,1] actions to joint targets."""
+            actions = torch.clamp(actions, -1.0, 1.0)
+            actions = torch.where(
+                torch.isfinite(actions), actions, torch.zeros_like(actions)
+            )
+            # Denormalize to joint position targets
+            ctrl = self._joint_mid + actions * self._joint_range
+            self.scene["robot"].set_joint_position_target(ctrl)
+            self._prev_action = ctrl
+
+        # ── Rewards ──────────────────────────────────────────────────
+        def _get_rewards(self) -> torch.Tensor:
+            robot = self.scene["robot"]
+            root_pos  = robot.data.root_pos_w
+            root_quat = robot.data.root_quat_w
+            joint_vel = robot.data.joint_vel
+
+            # Min obstacle distance (from contact sensor or proximity check)
+            # For now use a simple distance to known obstacle positions
+            # TODO: integrate with scene obstacle prims
+            min_obs_dist = torch.full(
+                (self.num_envs,), 10.0, device=self.device
+            )
+            has_collision = min_obs_dist < 0.35
+
+            reward, self._reward_info, new_dist = compute_reward(
+                robot_pos      = root_pos,
+                robot_quat     = root_quat,
+                goal_pos       = self._goal_pos,
+                prev_robot_pos = self._prev_root_pos,
+                joint_vel      = joint_vel,
+                action         = self._prev_action,
+                prev_action    = self._prev_prev_action,
+                min_obs_dist   = min_obs_dist,
+                has_collision  = has_collision,
+                prev_dist_goal = self._prev_dist,
+            )
+
+            self._prev_dist = new_dist
+            self._step_count += 1
+            return reward
+
+        # ── Termination ──────────────────────────────────────────────
+        def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+            robot = self.scene["robot"]
+            root_pos  = robot.data.root_pos_w
+            root_quat = robot.data.root_quat_w
+
+            terminated = check_termination(
+                root_pos, root_quat, self._goal_pos, self._step_count
+            )
+
+            # Truncation: timeout handled inside check_termination,
+            # but Isaac Lab wants it separate
+            truncated = self._step_count >= 1000
+
+            # Remove timeout from terminated (it's a truncation, not failure)
+            terminated = terminated & ~truncated
+
+            return terminated, truncated
+
+        def _post_physics_step(self):
+            """Cache previous state for reward computation."""
+            robot = self.scene["robot"]
+            self._prev_root_pos = robot.data.root_pos_w.clone()
+            self._prev_prev_action = self._prev_action.clone()
+
+            # Update humanoid patrol
+            if HUMANOID_OBSTACLE["enabled"]:
+                self._update_humanoid_patrol()
+
+        def _update_humanoid_patrol(self):
+            """Move humanoid obstacle along patrol path near goal."""
+            step_dt = HUMANOID_OBSTACLE.get("speed", 0.8) * 0.02  # control_dt
+            patrol_r = HUMANOID_OBSTACLE["patrol_radius"]
+
+            wp0 = torch.stack([
+                torch.clamp(self._goal_pos[:, 0] + patrol_r, -ROOM_HALF, ROOM_HALF),
+                torch.clamp(self._goal_pos[:, 1], -ROOM_HALF, ROOM_HALF),
+            ], dim=-1)
+            wp1 = torch.stack([
+                torch.clamp(self._goal_pos[:, 0] - patrol_r, -ROOM_HALF, ROOM_HALF),
+                torch.clamp(self._goal_pos[:, 1], -ROOM_HALF, ROOM_HALF),
+            ], dim=-1)
+            waypoints = torch.stack([wp0, wp1], dim=1)  # (B, 2, 2)
+
+            env_idx = torch.arange(self.num_envs, device=self.device)
+            target = waypoints[env_idx, self._human_wp_idx]
+
+            diff = target - self._human_pos
+            dist_h = torch.linalg.norm(diff, dim=-1, keepdim=True)
+            dir_h  = diff / (dist_h + 1e-8)
+
+            speed = HUMANOID_OBSTACLE["speed"]
+            self._human_pos = torch.clamp(
+                self._human_pos + dir_h * speed * 0.02,
+                -ROOM_HALF, ROOM_HALF,
+            )
+
+            switch_dist = HUMANOID_OBSTACLE["wp_switch_dist"]
+            self._human_wp_idx = torch.where(
+                dist_h.squeeze(-1) < switch_dist,
+                1 - self._human_wp_idx,
+                self._human_wp_idx,
+            )
+
+else:
+    # Stub when Isaac Lab is not available
+    class SpotNavEnv:
+        """Stub — install Isaac Lab to use this environment."""
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "SpotNavEnv requires NVIDIA Isaac Lab. "
+                "Install Isaac Lab: https://isaac-sim.github.io/IsaacLab/"
+            )

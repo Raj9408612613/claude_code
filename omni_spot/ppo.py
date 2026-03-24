@@ -1,0 +1,400 @@
+"""
+PyTorch PPO Trainer
+====================
+Ported from jax_ppo.py. Preserves all hyperparameters, GAE computation,
+value clipping, NaN guards, KL early stopping, and CNN feature caching.
+"""
+
+import time
+from typing import NamedTuple
+
+import torch
+import torch.nn as nn
+import numpy as np
+
+from .config import (
+    GAMMA, GAE_LAMBDA, CLIP_EPS, ENT_COEF, VF_COEF,
+    MAX_GRAD, LR, N_EPOCHS, MINIBATCH_SZ, TARGET_KL,
+    CNN_FEAT_DIM, PROPRIO_DIM, ACTION_DIM,
+    LOG_STD_MIN, LOG_STD_MAX,
+)
+from .spot_actor_critic import (
+    SpotActorCritic, gaussian_log_prob, gaussian_entropy,
+)
+
+
+class RolloutBatch:
+    """Stores flattened rollout experience (T*B, ...).
+
+    Mirrors the JAX RolloutBatch NamedTuple.
+    """
+    __slots__ = [
+        "cnn_feat", "proprio", "action", "log_prob",
+        "advantage", "ret", "old_value",
+    ]
+
+    def __init__(
+        self,
+        cnn_feat:  torch.Tensor,   # (T*B, 256)
+        proprio:   torch.Tensor,   # (T*B, 37)
+        action:    torch.Tensor,   # (T*B, 12)
+        log_prob:  torch.Tensor,   # (T*B,)
+        advantage: torch.Tensor,   # (T*B,)
+        ret:       torch.Tensor,   # (T*B,) normalized return
+        old_value: torch.Tensor,   # (T*B,) normalized old value
+    ):
+        self.cnn_feat  = cnn_feat
+        self.proprio   = proprio
+        self.action    = action
+        self.log_prob  = log_prob
+        self.advantage = advantage
+        self.ret       = ret
+        self.old_value = old_value
+
+    def __getitem__(self, idx):
+        return RolloutBatch(
+            cnn_feat  = self.cnn_feat[idx],
+            proprio   = self.proprio[idx],
+            action    = self.action[idx],
+            log_prob  = self.log_prob[idx],
+            advantage = self.advantage[idx],
+            ret       = self.ret[idx],
+            old_value = self.old_value[idx],
+        )
+
+
+# ── GAE Advantage Computation ────────────────────────────────────────────────
+
+def compute_gae(
+    rewards: torch.Tensor,   # (T, B)
+    values:  torch.Tensor,   # (T+1, B)
+    dones:   torch.Tensor,   # (T, B)
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Returns advantages (T,B) and returns (T,B).
+
+    Matches JAX compute_gae exactly.
+    """
+    T = rewards.shape[0]
+    advantages = torch.zeros_like(rewards)
+    gae = torch.zeros(rewards.shape[1], device=rewards.device)
+
+    for t in reversed(range(T)):
+        mask  = 1.0 - dones[t]
+        delta = rewards[t] + GAMMA * values[t + 1] * mask - values[t]
+        gae   = delta + GAMMA * GAE_LAMBDA * mask * gae
+        advantages[t] = gae
+
+    returns = advantages + values[:T]
+    return advantages, returns
+
+
+# ── PPO Trainer ──────────────────────────────────────────────────────────────
+
+class PPOTrainer:
+    """
+    Manages model, optimizer, and training loop.
+    Mirrors the JAX PPOTrainer class.
+    """
+
+    def __init__(
+        self,
+        n_envs:  int = 4096,
+        n_steps: int = 2048,
+        lr:      float = LR,
+        device:  str = "cuda",
+    ):
+        self.n_envs  = n_envs
+        self.n_steps = n_steps
+        self.device  = torch.device(device)
+
+        # ── Initialize network ────────────────────────────────────────
+        self.net = SpotActorCritic().to(self.device)
+
+        # ── Optimizer (Adam with gradient clipping) ───────────────────
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
+
+    # ──────────────────────────────────────────────────────────────────
+    @torch.no_grad()
+    def sample_action(self, obs: dict) -> tuple:
+        """Single inference step. Returns (action, log_prob, value, cnn_feat)."""
+        return self.net.inference_step(obs["depth"], obs["proprio"])
+
+    # ──────────────────────────────────────────────────────────────────
+    def collect_rollout(self, env, obs: dict, profile: bool = False):
+        """
+        Collect n_steps of experience.
+
+        Stores CNN features (T*B, 256) instead of raw depth to keep
+        rollout buffer at ~1 GB instead of ~374 GB.
+
+        Returns:
+            obs:           updated observation dict
+            batch:         RolloutBatch
+            rollout_stats: dict with reward/episode metrics
+        """
+        buf_cnn_feat = []
+        buf_proprio  = []
+        buf_actions  = []
+        buf_log_prob = []
+        buf_rewards  = []
+        buf_dones    = []
+        buf_values   = []
+
+        reward_sums = None
+        reward_count = 0
+
+        t_inference = 0.0
+        t_env_step  = 0.0
+
+        for _ in range(self.n_steps):
+            if profile:
+                torch.cuda.synchronize()
+                t0 = time.time()
+
+            action, log_prob, value, cnn_feat = self.sample_action(obs)
+
+            if profile:
+                torch.cuda.synchronize()
+                t_inference += time.time() - t0
+                t0 = time.time()
+
+            # Sanitize features
+            cnn_feat = torch.where(
+                torch.isfinite(cnn_feat), cnn_feat, torch.zeros_like(cnn_feat)
+            )
+            buf_cnn_feat.append(cnn_feat)
+            buf_proprio.append(obs["proprio"])
+            buf_actions.append(action)
+            buf_log_prob.append(log_prob)
+            buf_values.append(value)
+
+            # Environment step — Isaac Lab handles auto-reset internally
+            obs, reward, terminated, truncated, step_info = env.step(action)
+
+            if profile:
+                torch.cuda.synchronize()
+                t_env_step += time.time() - t0
+
+            done = terminated | truncated
+            buf_rewards.append(reward)
+            buf_dones.append(done.float())
+
+            # Accumulate reward component running sums
+            if reward_sums is None:
+                reward_sums = {k: v.clone() for k, v in step_info.items()
+                               if isinstance(v, torch.Tensor)}
+            else:
+                for k, v in step_info.items():
+                    if k in reward_sums and isinstance(v, torch.Tensor):
+                        reward_sums[k] = reward_sums[k] + v
+            reward_count += 1
+
+        # Bootstrap value for last step
+        _, _, last_value, _ = self.sample_action(obs)
+
+        # Stack: (T, B, ...)
+        rewards = torch.stack(buf_rewards)
+        dones   = torch.stack(buf_dones)
+        stacked_values = torch.stack(buf_values)
+        values = torch.cat([stacked_values, last_value.unsqueeze(0)], dim=0)
+
+        advantages, returns = compute_gae(rewards, values, dones)
+
+        # Normalize returns and old values with SAME scale
+        ret_mean = returns.mean()
+        ret_std  = returns.std() + 1e-8
+        returns_norm    = (returns        - ret_mean) / ret_std
+        old_values_norm = (stacked_values - ret_mean) / ret_std
+
+        # Flatten (T*B, ...)
+        def flat(x):
+            return x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x.reshape(-1)
+
+        # Normalize advantages globally
+        adv_flat = flat(advantages)
+        adv_mean = adv_flat.mean()
+        adv_std  = adv_flat.std() + 1e-8
+        adv_norm = (adv_flat - adv_mean) / adv_std
+
+        stacked_cnn_feat = torch.stack(buf_cnn_feat)
+        stacked_proprio  = torch.stack(buf_proprio)
+
+        batch = RolloutBatch(
+            cnn_feat  = flat(stacked_cnn_feat),
+            proprio   = flat(stacked_proprio),
+            action    = flat(torch.stack(buf_actions)),
+            log_prob  = flat(torch.stack(buf_log_prob)),
+            advantage = adv_norm,
+            ret       = flat(returns_norm),
+            old_value = flat(old_values_norm),
+        )
+
+        # Rollout stats (host sync)
+        rollout_stats = {
+            "rew_mean":  float(rewards.mean()),
+            "rew_min":   float(rewards.min()),
+            "rew_max":   float(rewards.max()),
+            "done_rate": float(dones.mean()),
+            "ep_count":  int(dones.sum()),
+        }
+
+        # Diagnostics
+        rollout_stats["_diag"] = {
+            "ret_raw_mean":      float(returns.mean()),
+            "ret_raw_std":       float(returns.std()),
+            "ret_raw_min":       float(returns.min()),
+            "ret_raw_max":       float(returns.max()),
+            "ret_norm_mean":     float(returns_norm.mean()),
+            "ret_norm_std":      float(returns_norm.std()),
+            "ret_norm_min":      float(returns_norm.min()),
+            "ret_norm_max":      float(returns_norm.max()),
+            "ret_scale_mean":    float(ret_mean),
+            "ret_scale_std":     float(ret_std),
+            "adv_mean":          float(advantages.mean()),
+            "adv_std":           float(advantages.std()),
+            "adv_min":           float(advantages.min()),
+            "adv_max":           float(advantages.max()),
+            "val_raw_mean":      float(stacked_values.mean()),
+            "val_raw_std":       float(stacked_values.std()),
+            "val_raw_min":       float(stacked_values.min()),
+            "val_raw_max":       float(stacked_values.max()),
+            "explained_var":     float(
+                1.0 - torch.var(returns - stacked_values)
+                / (torch.var(returns) + 1e-8)
+            ),
+            "proprio_mean":      float(stacked_proprio.mean()),
+            "proprio_std":       float(stacked_proprio.std()),
+            "proprio_nan_frac":  float((~torch.isfinite(stacked_proprio)).float().mean()),
+            "cnn_feat_mean":     float(stacked_cnn_feat.mean()),
+            "cnn_feat_std":      float(stacked_cnn_feat.std()),
+            "cnn_feat_nan_frac": float((~torch.isfinite(stacked_cnn_feat)).float().mean()),
+        }
+
+        if reward_sums is not None and reward_count > 0:
+            reward_components = {
+                k: float(v.mean() / reward_count) for k, v in reward_sums.items()
+            }
+            rollout_stats["_diag"]["reward_components"] = reward_components
+
+        if profile:
+            rollout_stats["_timing"] = {
+                "inference_sec": t_inference,
+                "env_step_sec":  t_env_step,
+            }
+
+        return obs, batch, rollout_stats
+
+    # ──────────────────────────────────────────────────────────────────
+    def ppo_update_step(self, batch: RolloutBatch) -> dict:
+        """One gradient update on a minibatch with full NaN/explosion safeguards."""
+        self.net.train()
+
+        mean, log_std, value = self.net.head_forward(
+            batch.cnn_feat, batch.proprio
+        )
+
+        # ── Policy loss with ratio clamping ──────────────────────────
+        log_prob_new = gaussian_log_prob(mean, log_std, batch.action)
+        log_ratio = torch.clamp(log_prob_new - batch.log_prob, -10.0, 10.0)
+        ratio = torch.exp(log_ratio)
+
+        adv_norm = torch.clamp(batch.advantage, -5.0, 5.0)
+
+        pg_loss1    = ratio * adv_norm
+        pg_loss2    = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
+        policy_loss = -torch.mean(torch.minimum(pg_loss1, pg_loss2))
+
+        # ── Value loss with PPO clipping ─────────────────────────────
+        value_clipped = batch.old_value + torch.clamp(
+            value - batch.old_value, -CLIP_EPS, CLIP_EPS
+        )
+        vf_loss1   = (value         - batch.ret) ** 2
+        vf_loss2   = (value_clipped - batch.ret) ** 2
+        value_loss = 0.5 * torch.mean(torch.maximum(vf_loss1, vf_loss2))
+        value_loss = torch.clamp(value_loss, 0.0, 1_000_000.0)
+
+        # ── Entropy bonus ────────────────────────────────────────────
+        entropy = torch.mean(gaussian_entropy(log_std))
+
+        total = policy_loss + VF_COEF * value_loss - ENT_COEF * entropy
+        total = torch.clamp(total, -1e6, 1e6)
+
+        # NaN guard
+        if not torch.isfinite(total):
+            total = torch.tensor(0.0, device=total.device, requires_grad=True)
+
+        # ── Backward + gradient clip ─────────────────────────────────
+        self.optimizer.zero_grad()
+        total.backward()
+
+        # NaN guard on gradients
+        for p in self.net.parameters():
+            if p.grad is not None:
+                p.grad = torch.where(
+                    torch.isfinite(p.grad), p.grad, torch.zeros_like(p.grad)
+                )
+
+        grad_norm = nn.utils.clip_grad_norm_(self.net.parameters(), MAX_GRAD)
+        self.optimizer.step()
+
+        # ── Diagnostics ──────────────────────────────────────────────
+        with torch.no_grad():
+            approx_kl = torch.mean((ratio - 1.0) - log_ratio).item()
+            clip_frac = torch.mean(
+                ((ratio < 1.0 - CLIP_EPS) | (ratio > 1.0 + CLIP_EPS)).float()
+            ).item()
+
+        info = {
+            "policy_loss":     policy_loss.item(),
+            "value_loss":      value_loss.item(),
+            "entropy":         entropy.item(),
+            "total_loss":      total.item(),
+            "ratio_mean":      ratio.mean().item(),
+            "ratio_max":       ratio.max().item(),
+            "approx_kl":       approx_kl,
+            "clip_frac":       clip_frac,
+            "action_mean_abs": mean.abs().mean().item(),
+            "action_std_mean": torch.exp(log_std).mean().item(),
+            "value_pred_mean": value.mean().item(),
+            "value_pred_std":  value.std().item(),
+            "value_pred_min":  value.min().item(),
+            "value_pred_max":  value.max().item(),
+            "adv_mb_mean":     batch.advantage.mean().item(),
+            "adv_mb_std":      batch.advantage.std().item(),
+            "grad_norm":       grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm,
+        }
+        return info
+
+    # ──────────────────────────────────────────────────────────────────
+    def update(self, batch: RolloutBatch) -> dict:
+        """Run N_EPOCHS of PPO updates with KL early stopping."""
+        total_samples = batch.cnn_feat.shape[0]
+
+        for epoch in range(N_EPOCHS):
+            perm = torch.randperm(total_samples, device=self.device)
+
+            for start in range(0, total_samples, MINIBATCH_SZ):
+                idx = perm[start : start + MINIBATCH_SZ]
+                mb  = batch[idx]
+                info = self.ppo_update_step(mb)
+
+            # Early stop if policy changed too much
+            if info["approx_kl"] > TARGET_KL:
+                info["early_stop_epoch"] = epoch + 1
+                break
+
+        info["epochs_run"] = epoch + 1
+        return info
+
+    # ──────────────────────────────────────────────────────────────────
+    def save(self, path: str):
+        torch.save({
+            "model_state_dict": self.net.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+        }, path)
+
+    def load(self, path: str):
+        ckpt = torch.load(path, map_location=self.device, weights_only=True)
+        self.net.load_state_dict(ckpt["model_state_dict"])
+        if "optimizer_state_dict" in ckpt:
+            self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
