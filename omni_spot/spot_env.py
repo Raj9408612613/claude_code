@@ -15,7 +15,7 @@ import torch
 from .config import (
     JOINT_LOWER, JOINT_UPPER, STANDING_POSE, TARGET_HEIGHT,
     N_CAMS, CAM_H, CAM_W, MIN_DEPTH, MAX_DEPTH,
-    N_OBS, N_STATIC, N_DYNAMIC,
+    N_OBS, N_STATIC, N_DYNAMIC, HUMANOID_MOCAP_IDX,
     ROOM_HALF, HUMANOID_OBSTACLE, PROPRIO_DIM, ACTION_DIM,
 )
 from .reward import compute_reward, check_termination
@@ -78,6 +78,12 @@ if HAS_ISAAC:
                 self.num_envs, device=self.device, dtype=torch.int32
             )
 
+            # Obstacle positions: (num_envs, N_OBS, 3)
+            # Mirrors MJX mocap_pos — tracks where obstacles are for reward distance
+            self._obs_pos = torch.zeros(
+                self.num_envs, N_OBS, 3, device=self.device
+            )
+
         # ── Reset ────────────────────────────────────────────────────
         def _reset_idx(self, env_ids: torch.Tensor):
             """Reset selected environments."""
@@ -132,14 +138,45 @@ if HAS_ISAAC:
             self._prev_action[env_ids] = 0.0
             self._step_count[env_ids] = 0
 
+            # Randomize obstacle positions (same logic as MJX version)
+            # Generate positions for all N_OBS obstacles
+            obs_xy = torch.empty(n, N_OBS, 2, device=self.device).uniform_(
+                -ROOM_HALF, ROOM_HALF
+            )
+            obs_z = torch.full((n, N_OBS, 1), 0.5, device=self.device)
+            obs_pos_new = torch.cat([obs_xy, obs_z], dim=-1)  # (n, N_OBS, 3)
+
+            # Randomize number of active obstacles per env (2-6, excluding humanoid)
+            n_active = torch.randint(2, 7, (n,), device=self.device)
+            n_non_human = N_OBS - 1  # 30 (static + dynamic, exclude humanoid)
+            obs_indices = torch.arange(n_non_human, device=self.device)
+            active_mask = obs_indices.unsqueeze(0) < n_active.unsqueeze(1)  # (n, 30)
+
+            # Send inactive obstacles off-scene
+            OFF_SCENE = torch.tensor(
+                [100.0, 0.0, 0.5], device=self.device
+            )
+            obs_pos_new[:, :n_non_human] = torch.where(
+                active_mask.unsqueeze(-1),
+                obs_pos_new[:, :n_non_human],
+                OFF_SCENE,
+            )
+
             # Humanoid init near goal
             patrol_r = HUMANOID_OBSTACLE["patrol_radius"]
-            self._human_pos[env_ids, 0] = torch.clamp(
+            human_x0 = torch.clamp(
                 goal_xy[:, 0] + patrol_r, -ROOM_HALF, ROOM_HALF
             )
-            self._human_pos[env_ids, 1] = torch.clamp(
-                goal_xy[:, 1], -ROOM_HALF, ROOM_HALF
-            )
+            human_y0 = torch.clamp(goal_xy[:, 1], -ROOM_HALF, ROOM_HALF)
+
+            obs_pos_new[:, HUMANOID_MOCAP_IDX, 0] = human_x0
+            obs_pos_new[:, HUMANOID_MOCAP_IDX, 1] = human_y0
+            obs_pos_new[:, HUMANOID_MOCAP_IDX, 2] = HUMANOID_OBSTACLE["mocap_z"]
+
+            self._obs_pos[env_ids] = obs_pos_new
+
+            self._human_pos[env_ids, 0] = human_x0
+            self._human_pos[env_ids, 1] = human_y0
             self._human_wp_idx[env_ids] = 0
 
         # ── Observations ─────────────────────────────────────────────
@@ -216,12 +253,18 @@ if HAS_ISAAC:
             root_quat = robot.data.root_quat_w
             joint_vel = robot.data.joint_vel
 
-            # Min obstacle distance (from contact sensor or proximity check)
-            # For now use a simple distance to known obstacle positions
-            # TODO: integrate with scene obstacle prims
-            min_obs_dist = torch.full(
-                (self.num_envs,), 10.0, device=self.device
-            )
+            # Update humanoid position in obstacle array
+            self._obs_pos[:, HUMANOID_MOCAP_IDX, 0] = self._human_pos[:, 0]
+            self._obs_pos[:, HUMANOID_MOCAP_IDX, 1] = self._human_pos[:, 1]
+            self._obs_pos[:, HUMANOID_MOCAP_IDX, 2] = HUMANOID_OBSTACLE["mocap_z"]
+
+            # Compute min obstacle distance (same math as MJX version)
+            robot_xy = root_pos[:, :2]                                         # (B, 2)
+            obs_xy = self._obs_pos[:, :, :2]                                   # (B, N_OBS, 2)
+            dists = torch.linalg.norm(
+                obs_xy - robot_xy.unsqueeze(1), dim=-1
+            )                                                                  # (B, N_OBS)
+            min_obs_dist = dists.min(dim=-1).values                            # (B,)
             has_collision = min_obs_dist < 0.35
 
             reward, self._reward_info, new_dist = compute_reward(

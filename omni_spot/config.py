@@ -76,6 +76,25 @@ N_STATIC   = 25
 N_DYNAMIC  = 5
 N_HUMANOID = 1
 N_OBS      = N_STATIC + N_DYNAMIC + N_HUMANOID  # 31
+HUMANOID_MOCAP_IDX = N_STATIC + N_DYNAMIC       # = 30 (last entry)
+
+# Obstacle half-sizes (x, y, z) — ported from warp_cameras.py _OBS_HALF_SIZES
+# 25 static boxes + 5 dynamic cylinders (approx as boxes) + 1 humanoid AABB
+OBS_HALF_SIZES = [
+    # 25 static boxes (varied sizes)
+    [0.30, 0.30, 0.50], [0.25, 0.40, 0.40], [0.20, 0.20, 0.80], [0.40, 0.20, 0.45],
+    [0.35, 0.35, 0.35], [0.30, 0.30, 0.50], [0.50, 0.20, 0.60], [0.20, 0.50, 0.40],
+    [0.40, 0.40, 0.30], [0.30, 0.25, 0.70], [0.20, 0.30, 0.50], [0.35, 0.35, 0.40],
+    [0.45, 0.20, 0.45], [0.30, 0.40, 0.30], [0.25, 0.25, 0.60], [0.30, 0.30, 0.50],
+    [0.40, 0.30, 0.35], [0.20, 0.40, 0.55], [0.35, 0.20, 0.40], [0.30, 0.30, 0.50],
+    [0.40, 0.40, 0.40], [0.25, 0.35, 0.45], [0.30, 0.25, 0.50], [0.45, 0.30, 0.35],
+    [0.20, 0.20, 0.70],
+    # 5 dynamic cylinders (approximated as boxes)
+    [0.25, 0.25, 0.85], [0.25, 0.25, 0.85], [0.25, 0.25, 0.85],
+    [0.25, 0.25, 0.85], [0.25, 0.25, 0.85],
+    # 1 humanoid AABB (centred at torso, z=1.0, covers 0-2m height)
+    [0.30, 0.30, 1.00],
+]
 
 # ── Humanoid walking obstacle ────────────────────────────────────────────────
 HUMANOID_OBSTACLE = {
