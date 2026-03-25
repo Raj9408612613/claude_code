@@ -39,7 +39,12 @@ cam.distance = 2.5
 cam.azimuth = 135
 cam.elevation = -20
 
-renderer.update_scene(mj_data, cam)
+# Hide site markers (camera/IMU dots) by disabling their render groups
+opt = mujoco.MjvOption()
+for i in range(6):
+    opt.sitegroup[i] = False
+
+renderer.update_scene(mj_data, cam, scene_option=opt)
 frame = renderer.render()
 
 # ── Save ────────────────────────────────────────────────────────────
