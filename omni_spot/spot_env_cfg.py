@@ -83,10 +83,17 @@ if HAS_ISAAC:
     class SpotSceneCfg(InteractiveSceneCfg):
         """Scene with Spot robot, ground, and depth cameras."""
 
-        # Ground plane
+        # Ground plane with tuned friction (compensates for PhysX vs MuJoCo gap)
         ground = AssetBaseCfg(
             prim_path="/World/ground",
-            spawn=sim_utils.GroundPlaneCfg(size=(20.0, 20.0)),
+            spawn=sim_utils.GroundPlaneCfg(
+                size=(20.0, 20.0),
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    static_friction=1.2,     # MuJoCo soft contacts → need more friction
+                    dynamic_friction=1.0,
+                    restitution=0.0,         # No bounce (MuJoCo has soft contacts)
+                ),
+            ),
         )
 
         # Spot robot (imported from MJCF -> USD)

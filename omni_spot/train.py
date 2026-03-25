@@ -141,9 +141,11 @@ def main():
     try:
         from .spot_env_cfg import SpotNavEnvCfg
         from .spot_env import SpotNavEnv
+        from .physics_tuning import apply_tuning
 
         env_cfg = SpotNavEnvCfg()
         env_cfg.scene.num_envs = args.num_envs
+        apply_tuning(env_cfg.sim, env_cfg.scene)
         env = SpotNavEnv(cfg=env_cfg)
     except ImportError:
         print("[ERROR] Isaac Lab not available. Install Omniverse + Isaac Lab.")
