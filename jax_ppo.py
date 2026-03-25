@@ -204,21 +204,31 @@ class RolloutBatch(NamedTuple):
 # GAE ADVANTAGE COMPUTATION
 # ════════════════════════════════════════════════════════════════════════════
 
+@jax.jit
 def compute_gae(
     rewards:    jnp.ndarray,    # (T, B)
     values:     jnp.ndarray,    # (T+1, B)  last entry = bootstrap value
     dones:      jnp.ndarray,    # (T, B)
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Returns advantages (T,B) and returns (T,B)."""
-    T = rewards.shape[0]
-    advantages = jnp.zeros_like(rewards)
-    gae        = jnp.zeros(rewards.shape[1])
+    """Returns advantages (T,B) and returns (T,B).
 
-    for t in reversed(range(T)):
-        mask   = 1.0 - dones[t].astype(jnp.float32)
-        delta  = rewards[t] + GAMMA * values[t+1] * mask - values[t]
-        gae    = delta + GAMMA * GAE_LAMBDA * mask * gae
-        advantages = advantages.at[t].set(gae)
+    Uses jax.lax.scan (reverse) instead of a Python for-loop so the entire
+    GAE computation compiles into a single GPU kernel.
+    """
+    masks  = 1.0 - dones.astype(jnp.float32)            # (T, B)
+    deltas = rewards + GAMMA * values[1:] * masks - values[:-1]  # (T, B)
+
+    def _scan_fn(gae, t_rev):
+        # t_rev counts from 0 (last timestep) to T-1 (first timestep)
+        t = deltas.shape[0] - 1 - t_rev
+        gae = deltas[t] + GAMMA * GAE_LAMBDA * masks[t] * gae
+        return gae, gae
+
+    T = rewards.shape[0]
+    init_gae = jnp.zeros(rewards.shape[1])
+    _, gae_rev = jax.lax.scan(_scan_fn, init_gae, jnp.arange(T))
+    # gae_rev is (T, B) but in reverse time order — flip back
+    advantages = jnp.flip(gae_rev, axis=0)
 
     returns = advantages + values[:T]
     return advantages, returns
@@ -412,9 +422,9 @@ class PPOTrainer:
         buf_dones    = []
         buf_values   = []
 
-        # Running sums for reward components (avoids storing 2048 dicts)
-        reward_sums = None
-        reward_count = 0
+        # Buffer reward info dicts and stack once at end (avoids 512-long
+        # addition chains that stall materialization)
+        buf_reward_info = []
 
         # Optional per-component timing
         t_inference = 0.0
@@ -450,12 +460,7 @@ class PPOTrainer:
             buf_rewards.append(reward)
             buf_dones.append(done.astype(jnp.float32))
 
-            # Accumulate reward component running sums instead of buffering all dicts
-            if reward_sums is None:
-                reward_sums = {k: v for k, v in step_info.items()}
-            else:
-                reward_sums = {k: reward_sums[k] + v for k, v in step_info.items()}
-            reward_count += 1
+            buf_reward_info.append(step_info)
 
             # Auto-reset: immediately replace terminated envs with fresh ones
             self.rng, k = jax.random.split(self.rng)
@@ -564,11 +569,12 @@ class PPOTrainer:
 
         t_diag_end = time.time()
 
-        # Aggregate reward components from running sums (no per-step stacking)
-        if reward_sums is not None and reward_count > 0:
-            reward_components = {
-                k: float(v.mean() / reward_count) for k, v in reward_sums.items()
-            }
+        # Aggregate reward components: stack once, then mean over T and B
+        if buf_reward_info:
+            reward_components = {}
+            for key in buf_reward_info[0]:
+                vals = jnp.stack([info[key] for info in buf_reward_info])  # (T, B)
+                reward_components[key] = float(vals.mean())
             rollout_stats["_diag"]["reward_components"] = reward_components
 
         # Attach timing info when profiling

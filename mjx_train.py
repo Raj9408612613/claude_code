@@ -28,8 +28,8 @@ GPU Memory Notes:
 import os
 # Must be set BEFORE importing JAX — switches from pre-allocating 90% of GPU
 # VRAM to grow-on-demand, so nvidia-smi shows actual memory usage.
-#os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-#os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 
 import argparse
 import sys
