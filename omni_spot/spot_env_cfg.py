@@ -16,7 +16,7 @@ from .config import (
     PHYSICS_DT, CONTROL_DT, PHYSICS_SUBSTEPS,
     JOINT_LOWER, JOINT_UPPER, STANDING_POSE, TARGET_HEIGHT,
     N_CAMS, CAM_H, CAM_W, H_FOV, V_FOV, MIN_DEPTH, MAX_DEPTH,
-    N_STATIC, N_DYNAMIC, N_HUMANOID, N_OBS,
+    N_STATIC, N_DYNAMIC, N_HUMANOID, N_OBS, OBS_HALF_SIZES,
     ROOM_HALF, HUMANOID_OBSTACLE,
     ACTION_DIM, PROPRIO_DIM,
 )
@@ -26,10 +26,10 @@ from .config import (
 # This file serves as the configuration specification.
 try:
     import omni.isaac.lab.sim as sim_utils
-    from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg
+    from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
     from omni.isaac.lab.envs import DirectRLEnvCfg
     from omni.isaac.lab.scene import InteractiveSceneCfg
-    from omni.isaac.lab.sensors import CameraCfg
+    from omni.isaac.lab.sensors import CameraCfg, ContactSensorCfg
     from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
     from omni.isaac.lab.utils import configclass
     HAS_ISAAC = True
@@ -231,12 +231,10 @@ if HAS_ISAAC:
             ),
             init_state=AssetBaseCfg.InitialStateCfg(pos=(-5.0, 0.0, 1.5)),
         )
- 
         # ── Obstacle rigid bodies (25 static boxes + 5 dynamic + 1 humanoid) ──
         # Each is a kinematic rigid body (position-controlled, not simulated).
         # Positions are set from SpotNavEnv._obs_pos each step.
         # Spawned at off-scene (100, 0, 0.5) — moved into room on reset.
- 
     # Build obstacle configs programmatically from OBS_HALF_SIZES
     def _build_obstacle_cfgs():
         """Generate RigidObjectCfg for each obstacle."""
@@ -299,12 +297,10 @@ if HAS_ISAAC:
             ),
         )
         return cfgs
- 
     # Attach obstacle configs to scene class
     _obs_cfgs = _build_obstacle_cfgs()
     for _name, _cfg in _obs_cfgs.items():
         setattr(SpotSceneCfg, _name, _cfg)
- 
     # ── Contact sensor on robot (detects collisions with obstacles) ────
     SpotSceneCfg.contact_sensor = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*",
@@ -312,7 +308,6 @@ if HAS_ISAAC:
         history_length=1,
         filter_prim_paths_expr=["{ENV_REGEX_NS}/Obstacles/.*"],
     )
- 
     # ════════════════════════════════════════════════════════════════════════
     # ENVIRONMENT CONFIG
     # ════════════════════════════════════════════════════════════════════════
