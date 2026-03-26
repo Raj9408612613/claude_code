@@ -91,9 +91,13 @@ class SpotMJXEnv:
         xml_path: str = "models/spot_scene.xml",
         noise_enabled: bool = True,
         seed: int = 42,
+        render_interval: int = 4,
     ):
         self.n_envs        = n_envs
         self.noise_enabled = noise_enabled
+        self.render_interval = render_interval
+        self._step_call_count = 0
+        self._cached_depth = None
 
         # ── Load MuJoCo model ─────────────────────────────────────────
         xml_abs = os.path.join(os.path.dirname(__file__), xml_path)
@@ -256,7 +260,15 @@ class SpotMJXEnv:
             "human_wp_idx": jnp.zeros(self.n_envs, dtype=jnp.int32), # (B,)
             "human_t":      jnp.zeros(self.n_envs, dtype=jnp.float32),# (B,)
         }
-        obs = self._get_obs(state) if compute_obs else None
+        # Reset render cache so first step() renders fresh depth
+        self._step_call_count = 0
+        self._cached_depth = None
+
+        if compute_obs:
+            obs = self._get_obs(state)
+            self._cached_depth = obs["depth"]
+        else:
+            obs = None
         return state, obs
 
     # ════════════════════════════════════════════════════════════════════
@@ -400,7 +412,16 @@ class SpotMJXEnv:
             "human_wp_idx": new_human_wp,
             "human_t":      new_human_t,
         }
-        obs  = self._get_obs(new_state)
+
+        # Always compute proprio (cheap — pure JAX slicing)
+        proprio = self._get_proprio(new_state)
+
+        # Render depth only every render_interval steps (expensive — Warp GPU raycast)
+        self._step_call_count += 1
+        if self._cached_depth is None or self._step_call_count % self.render_interval == 0:
+            self._cached_depth = self._render_depth(new_state)
+
+        obs = {"depth": self._cached_depth, "proprio": proprio}
 
         # Guard: also terminate any env whose state has blown up (NaN/inf)
         terminated = terminated | ~is_healthy(dx.qpos, obs["proprio"])
@@ -412,21 +433,19 @@ class SpotMJXEnv:
     # OBSERVATION CONSTRUCTION
     # ════════════════════════════════════════════════════════════════════
 
-    def _get_obs(self, state: Dict) -> Dict:
+    def _render_depth(self, state: Dict) -> jnp.ndarray:
+        """Expensive: Warp GPU raycast + DLPack transfers. (B, N_CAMS, H, W)"""
         dx        = state["dx"]
-        goal_pos  = state["goal_pos"]
         mocap_pos = state["mocap_pos"]
+        cam_xpos  = dx.site_xpos[:, self._cam_site_ids, :]   # (B, N_CAMS, 3)
+        cam_xmat  = dx.site_xmat[:, self._cam_site_ids, :]   # (B, N_CAMS, 9)
+        return self._renderer.render(cam_xpos, cam_xmat, mocap_pos)
 
-        # ── Depth images via Warp ─────────────────────────────────────
-        site_ids = self._cam_site_ids
-        # site_xpos: (B, n_sites_total, 3) → pick our 5 cams
-        cam_xpos = dx.site_xpos[:, site_ids, :]   # (B, N_CAMS, 3)
-        cam_xmat = dx.site_xmat[:, site_ids, :]   # (B, N_CAMS, 9)
+    def _get_proprio(self, state: Dict) -> jnp.ndarray:
+        """Cheap: pure JAX array slicing, no GPU rendering. (B, 37)"""
+        dx       = state["dx"]
+        goal_pos = state["goal_pos"]
 
-        depth = self._renderer.render(cam_xpos, cam_xmat, mocap_pos)
-        # depth: (B, N_CAMS, H, W)
-
-        # ── Proprioception (37-dim) ───────────────────────────────────
         robot_pos  = dx.qpos[:, 0:3]
         robot_quat = dx.qpos[:, 3:7]
         robot_linv = dx.qvel[:, 0:3]
@@ -434,20 +453,10 @@ class SpotMJXEnv:
         joint_pos  = dx.qpos[:, 7:19]
         joint_vel  = dx.qvel[:, 6:18]
 
-        # Goal relative direction and distance
-        goal_diff  = goal_pos - robot_pos[:, :2]              # (B, 2)
-        goal_dist  = jnp.linalg.norm(goal_diff, axis=-1, keepdims=True)  # (B, 1)
+        goal_diff  = goal_pos - robot_pos[:, :2]
+        goal_dist  = jnp.linalg.norm(goal_diff, axis=-1, keepdims=True)
         goal_dir   = goal_diff / (goal_dist + 1e-8)
 
-        # Scale each component to roughly [-1, 1] range so the network
-        # sees inputs with std ≈ 1 instead of std ≈ 31.
-        # joint_pos:  typical range ±π   → /π
-        # joint_vel:  typical range ±20  → /20
-        # robot_quat: already in [-1,1]
-        # robot_linv: typical range ±5   → /5
-        # robot_angv: typical range ±10  → /10
-        # goal_dir:   already in [-1,1]
-        # goal_dist:  typical range 0-10 → /5
         proprio = jnp.concatenate([
             joint_pos / 3.14,    # 12
             joint_vel / 20.0,    # 12
@@ -458,10 +467,14 @@ class SpotMJXEnv:
             goal_dist / 5.0,     # 1
         ], axis=-1)              # 37-dim
 
-        # Sanitize: replace NaN/inf with 0, then clip to ±10.
         proprio = jnp.where(jnp.isfinite(proprio), proprio, 0.0)
         proprio = jnp.clip(proprio, -10.0, 10.0)
+        return proprio
 
+    def _get_obs(self, state: Dict) -> Dict:
+        """Full observation (depth + proprio). Used by reset()."""
+        depth   = self._render_depth(state)
+        proprio = self._get_proprio(state)
         return {"depth": depth, "proprio": proprio}
 
     # ════════════════════════════════════════════════════════════════════

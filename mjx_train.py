@@ -79,6 +79,8 @@ def parse_args():
     # Profiling
     p.add_argument("--profile",       type=int,   default=0, metavar="N",
                    help="Profile first N updates with per-component timing")
+    p.add_argument("--render_interval", type=int,  default=4,
+                   help="Render depth every N steps (1=every step, 4=skip 3/4)")
     p.add_argument("--warmup",        type=int,   default=2,
                    help="JIT warmup steps before training (0 to skip)")
     p.add_argument("--verbose_jit",   action="store_true",
@@ -278,6 +280,7 @@ def main():
     print(f"  lr:            {args.lr}")
     print(f"  seed:          {args.seed}")
     print(f"  depth_noise:   {not args.no_noise}")
+    print(f"  render_intv:   {args.render_interval} (depth every {args.render_interval} steps)")
     print(f"  timesteps/upd: {args.n_envs * args.n_steps:,}")
     print(f"  total_steps:   {args.n_envs * args.n_steps * args.total_updates:,}")
     print(f"  JAX devices:   {jax.devices()}")
@@ -298,10 +301,11 @@ def main():
     print("\n[INIT] Creating environment...")
     t0 = time.time()
     env = SpotMJXEnv(
-        n_envs        = args.n_envs,
-        xml_path      = args.xml_path,
-        noise_enabled = not args.no_noise,
-        seed          = args.seed,
+        n_envs          = args.n_envs,
+        xml_path        = args.xml_path,
+        noise_enabled   = not args.no_noise,
+        seed            = args.seed,
+        render_interval = args.render_interval,
     )
     print(f"[INIT] Environment created in {time.time()-t0:.1f}s")
     report_gpu_memory("after env creation")
