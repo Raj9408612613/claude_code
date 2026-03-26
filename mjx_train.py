@@ -41,7 +41,7 @@ import jax
 import jax.numpy as jnp
 
 from mjx_nav_env import SpotMJXEnv
-from jax_ppo import PPOTrainer
+from jax_ppo import PPOTrainer, compute_gae
 from ppo_diagnostics import print_diagnostics
 
 
@@ -79,6 +79,10 @@ def parse_args():
     # Profiling
     p.add_argument("--profile",       type=int,   default=0, metavar="N",
                    help="Profile first N updates with per-component timing")
+    p.add_argument("--warmup",        type=int,   default=2,
+                   help="JIT warmup steps before training (0 to skip)")
+    p.add_argument("--verbose_jit",   action="store_true",
+                   help="Enable JAX JIT compilation logging")
     return p.parse_args()
 
 
@@ -191,6 +195,76 @@ def report_gpu_memory(label=""):
         print(f"  [GPU {label}] Could not read memory stats: {e}")
 
 
+def warmup_jit(env, trainer, n_envs, n_steps, seed):
+    """Force JIT compilation of all functions with per-component timing.
+
+    Runs a few dummy steps so every JIT-compiled function gets compiled
+    before the training loop starts.  Prints timing for each component
+    so you can see exactly what's slow.
+    """
+    rng = jax.random.PRNGKey(seed)
+    print("\n[WARMUP] Forcing JIT compilation (this is one-time)...")
+    warmup_start = time.time()
+
+    # 1. Reset
+    print("  [1/5] reset()...", end=" ", flush=True)
+    t0 = time.time()
+    state, obs = env.reset(rng)
+    jax.block_until_ready(obs["proprio"])
+    print(f"{time.time()-t0:.1f}s")
+
+    # 2. Inference (_inference_step)
+    print("  [2/5] _inference_step (network forward + sample)...", end=" ", flush=True)
+    t0 = time.time()
+    action, log_prob, value, cnn_feat = trainer._sample_action(obs)
+    jax.block_until_ready(action)
+    print(f"{time.time()-t0:.1f}s")
+
+    # 3. Physics step (_batch_step — usually the slowest)
+    print("  [3/5] env.step (physics + render + reward)...", end=" ", flush=True)
+    t0 = time.time()
+    state, obs, reward, done, info = env.step(state, action)
+    jax.block_until_ready(reward)
+    print(f"{time.time()-t0:.1f}s")
+
+    # 4. Auto-reset
+    print("  [4/5] auto_reset...", end=" ", flush=True)
+    t0 = time.time()
+    rng, k = jax.random.split(rng)
+    state, obs = env.auto_reset(state, obs, done, k)
+    jax.block_until_ready(obs["proprio"])
+    print(f"{time.time()-t0:.1f}s")
+
+    # 5. GAE (compute_gae)
+    print("  [5/5] compute_gae...", end=" ", flush=True)
+    t0 = time.time()
+    dummy_r = jnp.zeros((n_steps, n_envs))
+    dummy_v = jnp.zeros((n_steps + 1, n_envs))
+    dummy_d = jnp.zeros((n_steps, n_envs))
+    compute_gae(dummy_r, dummy_v, dummy_d)
+    print(f"{time.time()-t0:.1f}s")
+
+    # Run a couple more cached steps to verify speed
+    print("  [+] Cached steps (should be fast)...", end=" ", flush=True)
+    t0 = time.time()
+    for _ in range(3):
+        action, _, _, _ = trainer._sample_action(obs)
+        state, obs, reward, done, _ = env.step(state, action)
+        rng, k = jax.random.split(rng)
+        state, obs = env.auto_reset(state, obs, done, k)
+        jax.block_until_ready(obs["proprio"])
+    cached_time = time.time() - t0
+    print(f"{cached_time:.1f}s ({cached_time/3*1000:.0f}ms/step)")
+
+    total = time.time() - warmup_start
+    print(f"[WARMUP] Complete in {total:.1f}s. Training will now start.\n")
+    report_gpu_memory("after warmup")
+
+    # Return a fresh state for training
+    rng2 = jax.random.PRNGKey(seed + 1)
+    return env.reset(rng2)
+
+
 def main():
     args = parse_args()
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -246,13 +320,23 @@ def main():
 
     logger = SimpleLogger(log_dir=log_dir, tb_dir=tb_dir)
 
-    # ── Initial reset ──────────────────────────────────────────────────
-    print("[INIT] Resetting environments...")
-    rng = jax.random.PRNGKey(args.seed)
-    rng, reset_key = jax.random.split(rng)
-    state, obs = env.reset(reset_key)
-    report_gpu_memory("after reset")
-    print("[INIT] Reset complete. Starting training.\n")
+    # ── Verbose JIT logging ──────────────────────────────────────────
+    if args.verbose_jit:
+        jax.config.update("jax_log_compiles", True)
+        print("[INIT] Verbose JIT logging enabled (JAX_LOG_COMPILES)")
+
+    # ── JIT warmup or plain reset ─────────────────────────────────────
+    if args.warmup > 0:
+        state, obs = warmup_jit(
+            env, trainer, args.n_envs, args.n_steps, args.seed,
+        )
+    else:
+        print("[INIT] Resetting environments...")
+        rng = jax.random.PRNGKey(args.seed)
+        rng, reset_key = jax.random.split(rng)
+        state, obs = env.reset(reset_key)
+        report_gpu_memory("after reset")
+        print("[INIT] Reset complete. Starting training.\n")
 
     # ── Training loop ──────────────────────────────────────────────────
     total_timesteps = 0
