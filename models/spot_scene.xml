@@ -33,7 +33,7 @@
         <geom group="2" type="mesh" contype="0" conaffinity="0"/>
       </default>
       <default class="collision">
-        <geom group="3" type="mesh"/>
+        <geom group="3"/>
         <default class="foot">
           <geom type="sphere" size="0.036" pos="0 0 -0.3365" priority="1"
                 condim="3" solimp="0.015 1 0.036" friction="0.8 0.02 0.01"/>
@@ -190,8 +190,8 @@
       <!-- Body visual meshes (real Spot geometry) -->
       <geom mesh="body_0" material="BlackAbs" class="visual"/>
       <geom mesh="body_1" material="wrap" class="visual"/>
-      <!-- Body collision mesh -->
-      <geom mesh="body_collision" class="collision"/>
+      <!-- Body collision: box approximation (MJX-friendly, no mesh collision) -->
+      <geom type="box" size="0.32 0.1 0.08" pos="0 0 0" class="collision"/>
 
       <!-- ── CAMERA SITES (match config.py CAMERA_RIG exactly) ── -->
       <site name="cam_front_center" pos="0.32 0.0 0.05"
@@ -233,13 +233,13 @@
           <joint name="fl_hy" axis="0 1 0" range="-0.898845 2.29511"/>
           <geom mesh="front_left_upper_leg_0" material="wrap" class="visual"/>
           <geom mesh="front_left_upper_leg_1" material="BlackAbs" class="visual"/>
-          <geom mesh="left_upper_leg_collision" class="collision"/>
+          <geom type="capsule" size="0.04" fromto="0 0 0 0 0 -0.32" class="collision"/>
           <body name="fl_lleg" pos="0.025 0 -0.32">
             <inertial pos="0.00225794 4.6076e-05 -0.180082" quat="1 0 0 1" mass="0.35"
               diaginertia="0.00405032 0.00399902 0.00014934"/>
             <joint name="fl_kn" axis="0 1 0" range="-2.7929 -0.254402"/>
             <geom material="BlackAbs" mesh="front_left_lower_leg" class="visual"/>
-            <geom mesh="left_lower_leg_collision" class="collision"/>
+            <geom type="capsule" size="0.03" fromto="0 0 0 0 0 -0.32" class="collision"/>
             <geom name="fl_foot" class="foot"/>
           </body>
         </body>
@@ -259,13 +259,13 @@
           <joint name="fr_hy" axis="0 1 0" range="-0.898845 2.24363"/>
           <geom mesh="front_right_upper_leg_0" material="wrap" class="visual"/>
           <geom mesh="front_right_upper_leg_1" material="BlackAbs" class="visual"/>
-          <geom mesh="right_upper_leg_collision" class="collision"/>
+          <geom type="capsule" size="0.04" fromto="0 0 0 0 0 -0.32" class="collision"/>
           <body name="fr_lleg" pos="0.025 0 -0.32">
             <inertial pos="0.00225794 4.6076e-05 -0.180082" quat="1 0 0 1" mass="0.35"
               diaginertia="0.00405032 0.00399902 0.00014934"/>
             <joint name="fr_kn" axis="0 1 0" range="-2.7929 -0.255648"/>
             <geom material="BlackAbs" mesh="front_right_lower_leg" class="visual"/>
-            <geom mesh="right_lower_leg_collision" class="collision"/>
+            <geom type="capsule" size="0.03" fromto="0 0 0 0 0 -0.32" class="collision"/>
             <geom name="fr_foot" class="foot"/>
           </body>
         </body>
@@ -285,13 +285,13 @@
           <joint name="hl_hy" axis="0 1 0" range="-0.898845 2.29511"/>
           <geom mesh="rear_left_upper_leg_0" material="wrap" class="visual"/>
           <geom mesh="rear_left_upper_leg_1" material="BlackAbs" class="visual"/>
-          <geom mesh="left_upper_leg_collision" class="collision"/>
+          <geom type="capsule" size="0.04" fromto="0 0 0 0 0 -0.32" class="collision"/>
           <body name="hl_lleg" pos="0.025 0 -0.32">
             <inertial pos="0.00225794 4.6076e-05 -0.180082" quat="1 0 0 1" mass="0.35"
               diaginertia="0.00405032 0.00399902 0.00014934"/>
             <joint name="hl_kn" axis="0 1 0" range="-2.7929 -0.247067"/>
             <geom material="BlackAbs" mesh="rear_left_lower_leg" class="visual"/>
-            <geom mesh="left_lower_leg_collision" class="collision"/>
+            <geom type="capsule" size="0.03" fromto="0 0 0 0 0 -0.32" class="collision"/>
             <geom name="hl_foot" class="foot"/>
           </body>
         </body>
@@ -311,13 +311,13 @@
           <joint name="hr_hy" axis="0 1 0" range="-0.898845 2.29511"/>
           <geom mesh="rear_right_upper_leg_0" material="wrap" class="visual"/>
           <geom mesh="rear_right_upper_leg_1" material="BlackAbs" class="visual"/>
-          <geom mesh="right_upper_leg_collision" class="collision"/>
+          <geom type="capsule" size="0.04" fromto="0 0 0 0 0 -0.32" class="collision"/>
           <body name="hr_lleg" pos="0.025 0 -0.32">
             <inertial pos="0.00225794 4.6076e-05 -0.180082" quat="1 0 0 1" mass="0.35"
               diaginertia="0.00405032 0.00399902 0.00014934"/>
             <joint name="hr_kn" axis="0 1 0" range="-2.7929 -0.248282"/>
             <geom material="BlackAbs" mesh="rear_right_lower_leg" class="visual"/>
-            <geom mesh="right_lower_leg_collision" class="collision"/>
+            <geom type="capsule" size="0.03" fromto="0 0 0 0 0 -0.32" class="collision"/>
             <geom name="hr_foot" class="foot"/>
           </body>
         </body>
