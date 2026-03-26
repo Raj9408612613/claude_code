@@ -4,6 +4,7 @@ import os
 os.environ["MUJOCO_GL"] = "osmesa"  # headless software rendering
 os.environ["PYOPENGL_PLATFORM"] = "osmesa"  # tell PyOpenGL to use OSMesa
 
+import mujoco
 import numpy as np
 import mujoco
 
