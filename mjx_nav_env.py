@@ -260,9 +260,15 @@ class SpotMJXEnv:
             "human_wp_idx": jnp.zeros(self.n_envs, dtype=jnp.int32), # (B,)
             "human_t":      jnp.zeros(self.n_envs, dtype=jnp.float32),# (B,)
         }
-        # Reset render cache so first step() renders fresh depth
-        self._step_call_count = 0
-        self._cached_depth = None
+        # Reset render cache so first step() renders fresh depth —
+        # but ONLY for full resets (compute_obs=True). When called from
+        # auto_reset (compute_obs=False), preserving the cache is critical:
+        # clearing it would force depth re-rendering on the next step,
+        # defeating the render_interval optimization (rendering every step
+        # instead of every Nth step).
+        if compute_obs:
+            self._step_call_count = 0
+            self._cached_depth = None
 
         if compute_obs:
             obs = self._get_obs(state)

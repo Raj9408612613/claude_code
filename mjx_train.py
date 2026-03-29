@@ -52,8 +52,8 @@ def parse_args():
                    help="Number of parallel environments")
     p.add_argument("--n_steps",       type=int,   default=2048,
                    help="Rollout length per update")
-    p.add_argument("--xml_path",      type=str,   default="models/spot_scene.xml",
-                   help="Path to MuJoCo XML scene")
+    p.add_argument("--xml_path",      type=str,   default="models/spot_scene_train.xml",
+                   help="Path to MuJoCo XML scene (use spot_scene_train.xml for fast training, spot_scene.xml for visualization)")
     # Training
     p.add_argument("--total_updates", type=int,   default=500,
                    help="Total PPO update iterations")
