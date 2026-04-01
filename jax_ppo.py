@@ -191,7 +191,7 @@ def _gaussian_entropy(log_std):
 # ════════════════════════════════════════════════════════════════════════════
 
 class RolloutBatch(NamedTuple):
-    cnn_feat:    jnp.ndarray   # (T*B, CNN_FEAT_DIM=256)  pre-encoded depth features
+    depth:       jnp.ndarray   # (T*B, 5, 120, 160) float16 — raw depth, re-encoded in update
     proprio:     jnp.ndarray   # (T*B, 37)
     action:      jnp.ndarray   # (T*B, 12)
     log_prob:    jnp.ndarray   # (T*B,)
@@ -246,7 +246,14 @@ def ppo_update(
     """One gradient update on a minibatch with full NaN/explosion safeguards."""
 
     def loss_fn(params):
-        mean, log_std, value = _head_forward(params, batch.cnn_feat, batch.proprio)
+        # Re-encode raw depth through CNN with current params so gradients
+        # flow back to params["cnn"].  depth is stored as float16; convert
+        # to float32 and normalise (same /10.0 as _inference_step).
+        cnn_feat = DepthCNNEncoder().apply(
+            {"params": params["cnn"]},
+            batch.depth.astype(jnp.float32) / 10.0,
+        )
+        mean, log_std, value = _head_forward(params, cnn_feat, batch.proprio)
 
         # ── Policy loss with ratio clamping ────────────────────────────
         log_prob_new = _gaussian_log_prob(mean, log_std, batch.action)
@@ -414,7 +421,7 @@ class PPOTrainer:
         Stores CNN features (T*B, 256) instead of raw depth (T*B, 5, 120, 160)
         to keep the rollout buffer at ~1 GB instead of ~374 GB.
         """
-        buf_cnn_feat = []
+        buf_depth    = []
         buf_proprio  = []
         buf_actions  = []
         buf_log_prob = []
@@ -442,9 +449,9 @@ class PPOTrainer:
                 t_inference += time.time() - t0
                 t0 = time.time()
 
-            # Sanitize features: replace NaN/inf with 0 before storing
-            cnn_feat = jnp.where(jnp.isfinite(cnn_feat), cnn_feat, 0.0)
-            buf_cnn_feat.append(cnn_feat)            # (B, 256) — not raw depth
+            # Store raw depth as float16 so the CNN can be trained during
+            # the update step.  fp16 halves buffer memory (6.3 GB vs 12.6 GB).
+            buf_depth.append(obs["depth"].astype(jnp.float16))
             buf_proprio.append(obs["proprio"])        # already sanitized in env
             buf_actions.append(action)
             buf_log_prob.append(log_prob)
@@ -505,12 +512,12 @@ class PPOTrainer:
         adv_norm = (adv_flat - adv_mean) / adv_std
 
         # Stack observation buffers once — reused for batch and diagnostics
-        stacked_cnn_feat = jnp.stack(buf_cnn_feat)  # (T, B, 256)
-        stacked_proprio  = jnp.stack(buf_proprio)    # (T, B, 37)
+        stacked_depth   = jnp.stack(buf_depth)    # (T, B, 5, 120, 160) float16
+        stacked_proprio = jnp.stack(buf_proprio)  # (T, B, 37)
 
         batch = RolloutBatch(
-            cnn_feat   = flat(stacked_cnn_feat),
-            proprio    = flat(stacked_proprio),
+            depth    = flat(stacked_depth),
+            proprio  = flat(stacked_proprio),
             action     = flat(jnp.stack(buf_actions)),
             log_prob   = flat(jnp.stack(buf_log_prob)),
             advantage  = adv_norm,
@@ -530,7 +537,7 @@ class PPOTrainer:
         }
 
         # ── Rollout diagnostics ────────────────────────────────────────
-        # Reuse stacked_values, stacked_proprio, stacked_cnn_feat (no redundant stacking)
+        # Reuse stacked_values, stacked_proprio, stacked_depth (no redundant stacking)
         rollout_stats["_diag"] = {
             # Raw returns (before normalization)
             "ret_raw_mean":      float(returns.mean()),
@@ -562,9 +569,8 @@ class PPOTrainer:
             "proprio_mean":      float(stacked_proprio.mean()),
             "proprio_std":       float(stacked_proprio.std()),
             "proprio_nan_frac":  float(jnp.mean(~jnp.isfinite(stacked_proprio))),
-            "cnn_feat_mean":     float(stacked_cnn_feat.mean()),
-            "cnn_feat_std":      float(stacked_cnn_feat.std()),
-            "cnn_feat_nan_frac": float(jnp.mean(~jnp.isfinite(stacked_cnn_feat))),
+            "depth_mean":        float(stacked_depth.astype(jnp.float32).mean()),
+            "depth_std":         float(stacked_depth.astype(jnp.float32).std()),
         }
 
         t_diag_end = time.time()
@@ -592,7 +598,7 @@ class PPOTrainer:
     # ──────────────────────────────────────────────────────────────────
     def update(self, batch: RolloutBatch) -> Dict:
         """Run N_EPOCHS of PPO updates with KL early stopping."""
-        total_samples = batch.cnn_feat.shape[0]
+        total_samples = batch.depth.shape[0]
         TARGET_KL = 0.03   # stop epoch loop if approx KL exceeds this
 
         for epoch in range(N_EPOCHS):
@@ -602,7 +608,7 @@ class PPOTrainer:
             for start in range(0, total_samples, MINIBATCH_SZ):
                 idx = perm[start : start + MINIBATCH_SZ]
                 mb  = RolloutBatch(
-                    cnn_feat   = batch.cnn_feat[idx],
+                    depth      = batch.depth[idx],
                     proprio    = batch.proprio[idx],
                     action     = batch.action[idx],
                     log_prob   = batch.log_prob[idx],
