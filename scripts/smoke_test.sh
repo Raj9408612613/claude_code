@@ -78,21 +78,35 @@ if [[ "$LEVEL" == "--full" ]]; then
     echo ">>> Level 2: Isaac Lab SpotNavEnv + PPO (64 envs, 128 steps, 5 updates)"
     echo ""
 
+    CUSTOM_IMAGE="isaac-lab-spot:latest"
+
+    # Check Docker image exists
+    if ! sudo docker image inspect "$CUSTOM_IMAGE" &>/dev/null; then
+        echo "  [FAIL] Docker image '$CUSTOM_IMAGE' not found. Run setup_ec2_isaac.sh first."
+        exit 1
+    fi
+
     # Check USD file exists
     if [ ! -f "$REPO_DIR/models/spot_scene.usd" ]; then
         echo "  [FAIL] models/spot_scene.usd not found. Run MJCF→USD conversion first."
         exit 1
     fi
 
-    python -m omni_spot.train \
-        --num_envs 64 \
-        --n_steps 128 \
-        --total_updates 5 \
-        --log_dir "$REPO_DIR/smoke_test_output"
+    # Run full training inside Isaac Sim container
+    sudo docker run --rm --gpus all \
+        -e "ACCEPT_EULA=Y" \
+        -v "$REPO_DIR":/workspace \
+        -v "$HOME/omni_logs":/workspace/omni_logs \
+        "$CUSTOM_IMAGE" \
+        /isaac-sim/python.sh -m omni_spot.train \
+            --num_envs 64 \
+            --n_steps 128 \
+            --total_updates 5 \
+            --log_dir /workspace/smoke_test_output
 
     if [ $? -eq 0 ]; then
         echo ""
-        echo "  [PASS] Level 2: Isaac Lab smoke test passed"
+        echo "  [PASS] Level 2: Isaac Lab smoke test passed (via Docker container)"
     else
         echo ""
         echo "  [FAIL] Level 2: Isaac Lab smoke test failed"

@@ -226,10 +226,55 @@ else
 fi
 
 echo ""
+echo "--- Docker & Containers ---"
+
+# Test 16: Docker
+echo -n "  16. Docker... "
+if command -v docker &>/dev/null; then
+    DOCKER_VER=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')
+    pass "Docker $DOCKER_VER"
+else
+    fail "Docker not installed"
+fi
+
+# Test 17: NVIDIA Container Toolkit
+echo -n "  17. NVIDIA Container Toolkit... "
+if dpkg -l nvidia-container-toolkit &>/dev/null 2>&1; then
+    pass "installed"
+else
+    fail "nvidia-container-toolkit not installed"
+fi
+
+# Test 18: GPU visible in Docker
+echo -n "  18. GPU in Docker... "
+DOCKER_GPU=$(sudo docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)
+if [ -n "$DOCKER_GPU" ]; then
+    pass "$DOCKER_GPU"
+else
+    fail "GPU not accessible in Docker containers"
+fi
+
+# Test 19: Isaac Sim container
+echo -n "  19. Isaac Sim container... "
+if sudo docker image inspect nvcr.io/nvidia/isaac-sim:4.5.0 &>/dev/null; then
+    pass "nvcr.io/nvidia/isaac-sim:4.5.0 pulled"
+else
+    fail "Isaac Sim container not pulled"
+fi
+
+# Test 20: Custom isaac-lab-spot image
+echo -n "  20. isaac-lab-spot image... "
+if sudo docker image inspect isaac-lab-spot:latest &>/dev/null; then
+    pass "isaac-lab-spot:latest built"
+else
+    fail "isaac-lab-spot:latest not built (run setup_ec2_isaac.sh)"
+fi
+
+echo ""
 echo "--- Remote Desktop ---"
 
-# Test 16: DCV server
-echo -n "  16. NICE DCV... "
+# Test 21: DCV server
+echo -n "  21. NICE DCV... "
 if command -v dcv &>/dev/null && sudo systemctl is-active dcvserver &>/dev/null 2>&1; then
     pass "DCV server running"
 elif command -v dcv &>/dev/null; then

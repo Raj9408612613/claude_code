@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 # =============================================================================
-# EC2 Isaac Sim + IsaacLab Setup Script
+# EC2 Isaac Sim + IsaacLab Setup — Docker Container Approach
 # =============================================================================
-# Supports: Ubuntu 22.04 / 24.04, NVIDIA GPUs (A10G, RTX 6000, etc.)
+# Supports: Ubuntu 22.04 / 24.04, NVIDIA GPUs (RTX 6000, A10G, etc.)
 # Idempotent — safe to re-run after reboot or partial failure.
+#
+# Architecture:
+#   Host:      NVIDIA drivers, CUDA, Docker, conda (for mock env testing)
+#   Container: Isaac Sim + IsaacLab + Omniverse (for full training & USD conversion)
 #
 # Usage: bash setup_ec2_isaac.sh
 #
 # After completion:
 #   source ~/.bashrc && conda activate isaaclab
-#   cd ~/claude_code && bash scripts/verify_setup.sh
-#   bash scripts/smoke_test.sh
+#   cd ~/claude_code
+#   bash scripts/verify_setup.sh          # Verify all components
+#   bash scripts/smoke_test.sh            # Mock env test (host)
+#   bash scripts/smoke_test.sh --full     # Full Isaac Lab test (container)
+#   bash scripts/isaac_run.sh             # Interactive container shell
 # =============================================================================
 set -euo pipefail
 
@@ -25,31 +32,54 @@ UBUNTU_VER="${VERSION_ID:-unknown}"
 UBUNTU_CODENAME="${VERSION_CODENAME:-unknown}"
 echo ">>> Detected Ubuntu $UBUNTU_VER ($UBUNTU_CODENAME)"
 
-# ── Step 0: NVIDIA Drivers ──────────────────────────────────────────────────
-echo ">>> Step 0: Checking/Installing NVIDIA drivers..."
+# Determine CUDA repo name
+CUDA_REPO="ubuntu2404"
+if [[ "$UBUNTU_VER" == "22.04" ]]; then
+    CUDA_REPO="ubuntu2204"
+fi
+
+# =============================================================================
+# STEP 0: NVIDIA Drivers + CUDA Toolkit
+# =============================================================================
+echo ">>> Step 0: Checking/Installing NVIDIA drivers + CUDA..."
 if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
     echo "NVIDIA drivers already installed:"
     nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 else
-    echo "Installing NVIDIA drivers via CUDA repo..."
-    # Use correct repo URL for detected Ubuntu version
-    CUDA_REPO="ubuntu2404"
-    if [[ "$UBUNTU_VER" == "22.04" ]]; then
-        CUDA_REPO="ubuntu2204"
-    fi
+    echo "Installing NVIDIA drivers + CUDA toolkit..."
     wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO}/x86_64/cuda-keyring_1.1-1_all.deb"
     sudo dpkg -i cuda-keyring_1.1-1_all.deb
     sudo apt-get update -qq
-    sudo apt-get install -y cuda-drivers
+    sudo apt-get install -y cuda-drivers cuda-toolkit
     echo "=============================================="
-    echo "  NVIDIA drivers installed. REBOOT REQUIRED."
+    echo "  NVIDIA drivers + CUDA installed."
+    echo "  REBOOT REQUIRED."
     echo "  Run: sudo reboot"
     echo "  Then re-run this script."
     echo "=============================================="
     exit 0
 fi
 
-# ── Step 1: System Dependencies ─────────────────────────────────────────────
+# Install full CUDA toolkit if not present (needed for GPU containers)
+if ! command -v nvcc &>/dev/null; then
+    echo "Installing CUDA toolkit..."
+    if ! grep -q "cuda" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+        wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO}/x86_64/cuda-keyring_1.1-1_all.deb"
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+        sudo apt-get update -qq
+    fi
+    sudo apt-get install -y cuda-toolkit
+    # Add CUDA to PATH
+    echo 'export PATH=/usr/local/cuda/bin:$PATH' >> "$HOME/.bashrc"
+    echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}' >> "$HOME/.bashrc"
+    export PATH=/usr/local/cuda/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
+    echo "CUDA toolkit installed."
+fi
+
+# =============================================================================
+# STEP 1: System Dependencies
+# =============================================================================
 echo ">>> Step 1: Installing system dependencies..."
 sudo apt-get update -qq
 
@@ -64,318 +94,36 @@ sudo apt-get install -y \
     build-essential git curl wget unzip \
     "$GL_PKG" libglib2.0-0 libsm6 libxrender1 libxext6 \
     libxkbcommon0 libvulkan1 vulkan-tools \
-    mesa-utils xdg-utils
+    mesa-utils xdg-utils ca-certificates gnupg lsb-release
 
 echo ">>> System dependencies installed."
 
-# ── Step 2: Miniconda ───────────────────────────────────────────────────────
-echo ">>> Step 2: Installing Miniconda..."
-CONDA_DIR="$HOME/miniconda3"
-if [ -d "$CONDA_DIR" ]; then
-    echo "Miniconda already installed at $CONDA_DIR"
-else
-    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
-    bash /tmp/miniconda.sh -b -p "$CONDA_DIR"
-    rm -f /tmp/miniconda.sh
-    echo "Miniconda installed."
-fi
+# =============================================================================
+# STEP 2: Docker + NVIDIA Container Toolkit
+# =============================================================================
+echo ">>> Step 2: Installing Docker + NVIDIA Container Toolkit..."
 
-# Initialize conda for this shell session
-eval "$($CONDA_DIR/bin/conda shell.bash hook)"
-$CONDA_DIR/bin/conda init bash 2>/dev/null || true
-
-# Accept Conda ToS (required for non-interactive use)
-echo ">>> Accepting Conda Terms of Service..."
-conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true
-conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
-
-echo ">>> Miniconda ready."
-
-# ── Step 3: Create Conda Environment ────────────────────────────────────────
-echo ">>> Step 3: Creating isaaclab conda environment (Python 3.11)..."
-ENV_NAME="isaaclab"
-
-if conda env list | grep -q "^${ENV_NAME} "; then
-    echo "Conda env '$ENV_NAME' already exists."
-else
-    conda create -n "$ENV_NAME" python=3.11 -y
-    echo "Conda env '$ENV_NAME' created."
-fi
-
-conda activate "$ENV_NAME"
-echo ">>> Python: $(python --version)"
-
-# ── Step 4: Install Isaac Sim (pip) ─────────────────────────────────────────
-echo ">>> Step 4: Installing Isaac Sim 5.x via pip..."
-if python -c "import isaacsim" 2>/dev/null; then
-    echo "Isaac Sim already installed."
-else
-    pip install \
-        isaacsim-rl \
-        isaacsim-replicator \
-        isaacsim-extscache-physics \
-        isaacsim-extscache-kit-sdk
-    echo "Isaac Sim installed."
-fi
-
-# Accept Isaac Sim EULA non-interactively
-EULA_DIR="$HOME/.nvidia-omniverse/config"
-mkdir -p "$EULA_DIR"
-if [ ! -f "$EULA_DIR/eula_accepted" ]; then
-    cat > "$EULA_DIR/eula_accepted" << 'EULA'
-{"eula_accepted": true}
-EULA
-    echo "Isaac Sim EULA accepted."
-fi
-
-# ── Step 5: Install IsaacLab ────────────────────────────────────────────────
-echo ">>> Step 5: Installing IsaacLab..."
-ISAACLAB_DIR="$HOME/IsaacLab"
-
-if [ ! -d "$ISAACLAB_DIR" ]; then
-    echo "Cloning IsaacLab..."
-    git clone https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_DIR"
-fi
-
-cd "$ISAACLAB_DIR"
-
-# Pin setuptools to avoid flat-layout error (setuptools>=75 rejects IsaacLab layout)
-pip install "setuptools<75.0.0"
-
-# Pre-install ray to avoid pip resolution-too-deep error
-if ! python -c "import ray" 2>/dev/null; then
-    echo "Installing ray..."
-    pip install "ray[default]==2.45.0"
-fi
-
-# Install rl_games with legacy resolver (avoids ray dependency explosion)
-if ! python -c "import rl_games" 2>/dev/null; then
-    echo "Installing rl_games..."
-    pip install --use-deprecated=legacy-resolver \
-        "rl-games @ git+https://github.com/isaac-sim/rl_games.git@python3.11"
-fi
-
-# Install IsaacLab core with --no-deps (skips dex-retargeting which has no 3.11 wheel)
-if ! python -c "import isaaclab" 2>/dev/null; then
-    echo "Installing isaaclab core..."
-    pip install --no-deps -e "source/isaaclab"
-    # Manually install the deps we actually need
-    pip install toml "gymnasium==1.2.1" trimesh einops warp-lang \
-        "prettytable==3.3.0" flatdict
-fi
-
-# Install IsaacLab extensions
-for ext in isaaclab_assets isaaclab_tasks isaaclab_rl; do
-    if [ -d "source/$ext" ]; then
-        echo "Installing $ext..."
-        pip install --use-deprecated=legacy-resolver -e "source/$ext" 2>/dev/null || \
-        pip install --no-deps -e "source/$ext"
-    fi
-done
-
-# Extra packages for training & conversion
-pip install tensorboard "imageio[ffmpeg]" mujoco usd-core 2>/dev/null || true
-
-cd "$HOME"
-echo ">>> IsaacLab installed."
-
-# ── Step 6: Clone/Update Project Repo ───────────────────────────────────────
-echo ">>> Step 6: Setting up project repo..."
-REPO_DIR="$HOME/claude_code"
-
-if [ ! -d "$REPO_DIR" ]; then
-    git clone https://github.com/Raj9408612613/claude_code.git "$REPO_DIR"
-else
-    echo "Project repo already at $REPO_DIR"
-fi
-
-cd "$REPO_DIR"
-# Checkout the branch with omni_spot code
-git fetch origin nv-omni-spot-tr 2>/dev/null || true
-git checkout nv-omni-spot-tr 2>/dev/null || true
-
-cd "$HOME"
-echo ">>> Project repo ready at $REPO_DIR (branch: nv-omni-spot-tr)"
-
-# ── Step 7: MJCF → USD Conversion ──────────────────────────────────────────
-echo ">>> Step 7: MJCF → USD conversion..."
-USD_FILE="$REPO_DIR/models/spot_scene.usd"
-
-if [ -f "$USD_FILE" ]; then
-    echo "USD file already exists at $USD_FILE"
-else
-    echo "Attempting MJCF→USD conversion..."
-
-    # Try Method 1: Isaac Sim SimulationApp (works on RTX GPUs like RTX 6000)
-    PYTHONPATH="$REPO_DIR" python -c "
-import sys
-try:
-    import isaacsim
-    from isaacsim import SimulationApp
-    app = SimulationApp({'headless': True})
-
-    from isaaclab.sim.converters import MjcfConverter, MjcfConverterCfg
-    cfg = MjcfConverterCfg(
-        asset_path='$REPO_DIR/models/spot_scene.xml',
-        usd_dir='$REPO_DIR/models',
-        usd_file_name='spot_scene.usd',
-        fix_base=False,
-        import_sites=True,
-        self_collision=False,
-    )
-    converter = MjcfConverter(cfg)
-    print(f'USD saved via IsaacLab: {converter.usd_path}')
-    app.close()
-except Exception as e:
-    print(f'IsaacLab converter failed: {e}')
-    print('Falling back to mujoco + usd-core converter...')
-    sys.exit(1)
-" 2>/dev/null || {
-        # Method 2: Lightweight mujoco + usd-core (no Isaac Sim runtime needed)
-        echo "Using mujoco + usd-core fallback converter..."
-        PYTHONPATH="$REPO_DIR" python -c "
-import mujoco
-import numpy as np
-from pxr import Usd, UsdGeom, UsdPhysics, Gf, Sdf
-
-model = mujoco.MjModel.from_xml_path('$REPO_DIR/models/spot_scene.xml')
-data = mujoco.MjData(model)
-mujoco.mj_kinematics(model, data)
-
-stage = Usd.Stage.CreateNew('$REPO_DIR/models/spot_scene.usd')
-UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
-UsdGeom.SetStageMetersPerUnit(stage, 1.0)
-
-root = UsdGeom.Xform.Define(stage, '/World')
-robot = UsdGeom.Xform.Define(stage, '/World/Spot')
-
-# Track body-to-path mapping for hierarchy
-body_paths = {}
-body_paths[0] = '/World/Spot'
-
-for i in range(model.nbody):
-    name = model.body(i).name or f'body_{i}'
-    name = name.replace(' ', '_').replace('-', '_').replace('.', '_')
-
-    if i == 0:
-        path = '/World/Spot'
-    else:
-        parent_id = model.body_parentid[i]
-        parent_path = body_paths.get(parent_id, '/World/Spot')
-        path = f'{parent_path}/{name}'
-
-    body_paths[i] = path
-    xform = UsdGeom.Xform.Define(stage, path)
-
-    pos = model.body_pos[i]
-    quat = model.body_quat[i]  # w,x,y,z
-    xform.AddTranslateOp().Set(Gf.Vec3d(float(pos[0]), float(pos[1]), float(pos[2])))
-    xform.AddOrientOp().Set(Gf.Quatf(float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])))
-
-# Add geoms
-for g in range(model.ngeom):
-    geom = model.geom(g)
-    body_id = geom.bodyid
-    geom_name = geom.name or f'geom_{g}'
-    geom_name = geom_name.replace(' ', '_').replace('-', '_').replace('.', '_')
-    body_path = body_paths.get(body_id, '/World/Spot')
-    geom_path = f'{body_path}/{geom_name}'
-
-    if geom.type == mujoco.mjtGeom.mjGEOM_BOX:
-        prim = UsdGeom.Cube.Define(stage, geom_path)
-        prim.GetSizeAttr().Set(2.0)
-        sz = geom.size
-        UsdGeom.Xformable(prim).AddScaleOp().Set(Gf.Vec3f(float(sz[0]), float(sz[1]), float(sz[2])))
-    elif geom.type == mujoco.mjtGeom.mjGEOM_SPHERE:
-        prim = UsdGeom.Sphere.Define(stage, geom_path)
-        prim.GetRadiusAttr().Set(float(geom.size[0]))
-    elif geom.type == mujoco.mjtGeom.mjGEOM_CAPSULE:
-        prim = UsdGeom.Capsule.Define(stage, geom_path)
-        prim.GetRadiusAttr().Set(float(geom.size[0]))
-        prim.GetHeightAttr().Set(float(geom.size[1]) * 2)
-    elif geom.type == mujoco.mjtGeom.mjGEOM_CYLINDER:
-        prim = UsdGeom.Cylinder.Define(stage, geom_path)
-        prim.GetRadiusAttr().Set(float(geom.size[0]))
-        prim.GetHeightAttr().Set(float(geom.size[1]) * 2)
-    elif geom.type == mujoco.mjtGeom.mjGEOM_MESH:
-        mesh_id = geom.dataid
-        prim = UsdGeom.Mesh.Define(stage, geom_path)
-        vs = model.mesh_vertadr[mesh_id]
-        vn = model.mesh_vertnum[mesh_id]
-        verts = model.mesh_vert[vs:vs+vn]
-        fs = model.mesh_faceadr[mesh_id]
-        fn = model.mesh_facenum[mesh_id]
-        faces = model.mesh_face[fs:fs+fn]
-        prim.GetPointsAttr().Set([Gf.Vec3f(*v) for v in verts.tolist()])
-        prim.GetFaceVertexCountsAttr().Set([3] * fn)
-        prim.GetFaceVertexIndicesAttr().Set(faces.flatten().tolist())
-    elif geom.type == mujoco.mjtGeom.mjGEOM_PLANE:
-        prim = UsdGeom.Mesh.Define(stage, geom_path)
-        s = 10.0
-        prim.GetPointsAttr().Set([Gf.Vec3f(-s,-s,0), Gf.Vec3f(s,-s,0), Gf.Vec3f(s,s,0), Gf.Vec3f(-s,s,0)])
-        prim.GetFaceVertexCountsAttr().Set([4])
-        prim.GetFaceVertexIndicesAttr().Set([0,1,2,3])
-    else:
-        continue
-
-    gp = geom.pos
-    gq = geom.quat
-    xf = UsdGeom.Xformable(stage.GetPrimAtPath(geom_path))
-    xf.AddTranslateOp(opSuffix='local').Set(Gf.Vec3d(float(gp[0]), float(gp[1]), float(gp[2])))
-    xf.AddOrientOp(opSuffix='local').Set(Gf.Quatf(float(gq[0]), float(gq[1]), float(gq[2]), float(gq[3])))
-
-# Add joints
-for j in range(model.njnt):
-    jnt = model.jnt(j)
-    jnt_name = jnt.name or f'joint_{j}'
-    jnt_name = jnt_name.replace(' ', '_').replace('-', '_').replace('.', '_')
-    body_id = jnt.bodyid
-    body_path = body_paths.get(body_id, '/World/Spot')
-    jnt_path = f'{body_path}/{jnt_name}'
-
-    if jnt.type == mujoco.mjtJoint.mjJNT_HINGE:
-        rev = UsdPhysics.RevoluteJoint.Define(stage, jnt_path)
-        axis = jnt.axis
-        if abs(axis[0]) > 0.5:
-            rev.GetAxisAttr().Set('X')
-        elif abs(axis[1]) > 0.5:
-            rev.GetAxisAttr().Set('Y')
-        else:
-            rev.GetAxisAttr().Set('Z')
-        if jnt.limited:
-            lo = float(np.degrees(jnt.range[0]))
-            hi = float(np.degrees(jnt.range[1]))
-            rev.GetLowerLimitAttr().Set(lo)
-            rev.GetUpperLimitAttr().Set(hi)
-
-stage.GetRootLayer().Save()
-print(f'USD saved: $REPO_DIR/models/spot_scene.usd')
-print(f'Bodies: {model.nbody}, Geoms: {model.ngeom}, Joints: {model.njnt}, Meshes: {model.nmesh}')
-"
-    }
-
-    if [ -f "$USD_FILE" ]; then
-        echo ">>> USD conversion successful!"
-    else
-        echo ">>> WARNING: USD conversion failed. You can retry manually later."
-    fi
-fi
-
-# ── Step 8: Docker + NVIDIA Container Toolkit (optional, for full Isaac Sim) ─
-echo ">>> Step 8: Installing Docker + NVIDIA Container Toolkit..."
+# Docker
 if command -v docker &>/dev/null; then
     echo "Docker already installed."
 else
     sudo apt-get install -y docker.io
-    sudo usermod -aG docker "$USER"
     sudo systemctl start docker
     sudo systemctl enable docker
     echo "Docker installed."
 fi
 
+# Add user to docker group (avoids needing sudo for docker commands)
+if ! groups "$USER" | grep -q docker; then
+    sudo usermod -aG docker "$USER"
+    echo "Added $USER to docker group (will take effect on next login)."
+fi
+
+# NVIDIA Container Toolkit
 if dpkg -l nvidia-container-toolkit &>/dev/null 2>&1; then
     echo "NVIDIA Container Toolkit already installed."
 else
+    echo "Installing NVIDIA Container Toolkit..."
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
         sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
@@ -388,14 +136,193 @@ else
     echo "NVIDIA Container Toolkit installed."
 fi
 
-# ── Step 9: Quick Validation ────────────────────────────────────────────────
+# Verify GPU is visible in Docker
+echo "Verifying GPU access in Docker..."
+if sudo docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+    echo "Docker GPU access: OK"
+else
+    echo "WARNING: Docker GPU access failed. Continuing anyway..."
+fi
+
+# =============================================================================
+# STEP 3: Clone Project Repo
+# =============================================================================
+echo ">>> Step 3: Setting up project repo..."
+REPO_DIR="$HOME/claude_code"
+
+if [ ! -d "$REPO_DIR" ]; then
+    git clone https://github.com/Raj9408612613/claude_code.git "$REPO_DIR"
+else
+    echo "Project repo already at $REPO_DIR"
+fi
+
+cd "$REPO_DIR"
+git fetch origin nv-omni-spot-tr 2>/dev/null || true
+git checkout nv-omni-spot-tr 2>/dev/null || true
+cd "$HOME"
+echo ">>> Project repo ready at $REPO_DIR (branch: nv-omni-spot-tr)"
+
+# =============================================================================
+# STEP 4: Pull Isaac Sim Container (~15GB)
+# =============================================================================
+echo ">>> Step 4: Pulling Isaac Sim Docker container..."
+ISAAC_IMAGE="nvcr.io/nvidia/isaac-sim:4.5.0"
+
+if sudo docker image inspect "$ISAAC_IMAGE" &>/dev/null; then
+    echo "Isaac Sim container already pulled."
+else
+    echo "Pulling Isaac Sim container (~15GB, this will take a while)..."
+    sudo docker pull "$ISAAC_IMAGE"
+    echo "Isaac Sim container pulled."
+fi
+
+# =============================================================================
+# STEP 5: Build Custom Image (Isaac Sim + IsaacLab + project deps)
+# =============================================================================
+echo ">>> Step 5: Building isaac-lab-spot Docker image..."
+CUSTOM_IMAGE="isaac-lab-spot:latest"
+
+if sudo docker image inspect "$CUSTOM_IMAGE" &>/dev/null; then
+    echo "Custom image '$CUSTOM_IMAGE' already exists."
+    echo "  To rebuild: sudo docker rmi $CUSTOM_IMAGE && re-run this script"
+else
+    echo "Building custom Docker image with IsaacLab..."
+    cd "$REPO_DIR"
+    sudo docker build -t "$CUSTOM_IMAGE" -f Dockerfile.isaac .
+    cd "$HOME"
+    echo "Custom image built: $CUSTOM_IMAGE"
+fi
+
+# =============================================================================
+# STEP 6: MJCF → USD Conversion (inside container)
+# =============================================================================
+echo ">>> Step 6: MJCF → USD conversion..."
+USD_FILE="$REPO_DIR/models/spot_scene.usd"
+
+if [ -f "$USD_FILE" ]; then
+    echo "USD file already exists at $USD_FILE"
+else
+    echo "Converting MJCF → USD inside Isaac Sim container..."
+    sudo docker run --rm --gpus all \
+        -e "ACCEPT_EULA=Y" \
+        -v "$REPO_DIR":/workspace \
+        "$CUSTOM_IMAGE" \
+        /isaac-sim/python.sh -c "
+import sys
+try:
+    import isaacsim
+    from omni.isaac.kit import SimulationApp
+    app = SimulationApp({'headless': True})
+
+    # Try the MJCF importer extension
+    import omni.kit.app
+    manager = omni.kit.app.get_app().get_extension_manager()
+    manager.set_extension_enabled_immediate('omni.importer.mjcf', True)
+
+    from omni.importer.mjcf import _mjcf
+    importer = _mjcf.acquire_mjcf_interface()
+
+    import_config = _mjcf.ImportConfig()
+    import_config.fix_base = False
+    import_config.import_sites = True
+    import_config.self_collision = False
+
+    importer.create_asset_from_mjcf(
+        '/workspace/models/spot_scene.xml',
+        '/workspace/models',
+        'spot_scene',
+        import_config
+    )
+    print('USD saved via Isaac Sim MJCF importer')
+    app.close()
+except Exception as e:
+    print(f'Isaac Sim MJCF importer failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1 || {
+        echo "Isaac Sim importer failed. Trying IsaacLab MjcfConverter..."
+        sudo docker run --rm --gpus all \
+            -e "ACCEPT_EULA=Y" \
+            -v "$REPO_DIR":/workspace \
+            "$CUSTOM_IMAGE" \
+            /isaac-sim/python.sh -c "
+import sys
+try:
+    from isaacsim import SimulationApp
+    app = SimulationApp({'headless': True})
+
+    from isaaclab.sim.converters import MjcfConverter, MjcfConverterCfg
+    cfg = MjcfConverterCfg(
+        asset_path='/workspace/models/spot_scene.xml',
+        usd_dir='/workspace/models',
+        usd_file_name='spot_scene.usd',
+        fix_base=False,
+        import_sites=True,
+        self_collision=False,
+    )
+    converter = MjcfConverter(cfg)
+    print(f'USD saved via IsaacLab: {converter.usd_path}')
+    app.close()
+except Exception as e:
+    print(f'IsaacLab converter also failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1
+    }
+
+    if [ -f "$USD_FILE" ]; then
+        echo ">>> USD conversion successful: $USD_FILE"
+    else
+        echo ">>> WARNING: USD conversion failed."
+        echo "    The container-based conversion requires a GPU with full RTX support."
+        echo "    You can retry manually: bash scripts/isaac_run.sh"
+    fi
+fi
+
+# =============================================================================
+# STEP 7: Conda Environment (for host-side mock testing)
+# =============================================================================
+echo ">>> Step 7: Installing Miniconda + host Python environment..."
+CONDA_DIR="$HOME/miniconda3"
+if [ -d "$CONDA_DIR" ]; then
+    echo "Miniconda already installed at $CONDA_DIR"
+else
+    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
+    bash /tmp/miniconda.sh -b -p "$CONDA_DIR"
+    rm -f /tmp/miniconda.sh
+    echo "Miniconda installed."
+fi
+
+eval "$($CONDA_DIR/bin/conda shell.bash hook)"
+$CONDA_DIR/bin/conda init bash 2>/dev/null || true
+
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
+
+ENV_NAME="isaaclab"
+if conda env list | grep -q "^${ENV_NAME} "; then
+    echo "Conda env '$ENV_NAME' already exists."
+else
+    conda create -n "$ENV_NAME" python=3.11 -y
+fi
+
+conda activate "$ENV_NAME"
+
+# Install PyTorch + training deps on host (for mock env testing without container)
+pip install torch torchvision torchaudio tensorboard "imageio[ffmpeg]" 2>/dev/null || true
+
+echo ">>> Host Python environment ready: $(python --version)"
+
+# =============================================================================
+# STEP 8: Quick Validation
+# =============================================================================
 echo ""
-echo ">>> Step 9: Quick validation..."
-echo -n "  Python: "; python --version
-echo -n "  PyTorch CUDA: "; python -c "import torch; print(torch.cuda.is_available())"
-echo -n "  IsaacLab: "; python -c "import isaaclab; print('OK')" 2>/dev/null || echo "FAIL"
-echo -n "  Isaac Sim: "; python -c "import isaacsim; print('OK')" 2>/dev/null || echo "FAIL"
-echo -n "  Mock training: "
+echo ">>> Step 8: Quick validation..."
+echo ""
+echo "--- Host ---"
+echo -n "  NVIDIA driver: "; nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo "FAIL"
+echo -n "  CUDA toolkit:  "; nvcc --version 2>/dev/null | grep "release" | awk '{print $6}' || echo "not installed (OK — using container)"
+echo -n "  Python:         "; python --version 2>/dev/null || echo "FAIL"
+echo -n "  PyTorch CUDA:   "; python -c "import torch; print(f'{torch.__version__}, CUDA={torch.cuda.is_available()}')" 2>/dev/null || echo "FAIL"
+echo -n "  Mock training:  "
 PYTHONPATH="$REPO_DIR" python -c "
 from omni_spot.mock_env import MockSpotEnv
 from omni_spot.ppo import PPOTrainer
@@ -407,7 +334,16 @@ trainer.update(batch)
 print(f'OK (rew={stats[\"rew_mean\"]:.3f})')
 " 2>/dev/null || echo "FAIL"
 
-# ── Summary ─────────────────────────────────────────────────────────────────
+echo ""
+echo "--- Container ---"
+echo -n "  Docker:          "; docker --version 2>/dev/null | awk '{print $3}' || echo "FAIL"
+echo -n "  GPU in Docker:   "; sudo docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "FAIL"
+echo -n "  Isaac Sim image: "; sudo docker image inspect "$ISAAC_IMAGE" &>/dev/null && echo "OK" || echo "NOT PULLED"
+echo -n "  Custom image:    "; sudo docker image inspect "$CUSTOM_IMAGE" &>/dev/null && echo "OK" || echo "NOT BUILT"
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
 echo ""
 echo "=============================================="
 echo "  Setup complete at $(date)"
@@ -416,16 +352,25 @@ echo ""
 echo "GPU:"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 echo ""
-if [ -f "$REPO_DIR/models/spot_scene.usd" ]; then
-    echo "  USD model: $REPO_DIR/models/spot_scene.usd [READY]"
+echo "Docker images:"
+sudo docker images --format "  {{.Repository}}:{{.Tag}}  {{.Size}}" | grep -E "isaac|nvidia" || true
+echo ""
+if [ -f "$USD_FILE" ]; then
+    echo "  USD model: $USD_FILE [READY]"
 else
-    echo "  USD model: NOT YET GENERATED (see Step 7 in log)"
+    echo "  USD model: NOT YET GENERATED"
+    echo "  Retry: bash scripts/isaac_run.sh  (then convert inside container)"
 fi
 echo ""
-echo "Next steps:"
-echo "  1. source ~/.bashrc"
-echo "  2. conda activate isaaclab"
-echo "  3. cd ~/claude_code && bash scripts/verify_setup.sh"
-echo "  4. bash scripts/smoke_test.sh"
+echo "Usage:"
+echo "  source ~/.bashrc && conda activate isaaclab"
+echo ""
+echo "  # Host (mock env, no Omniverse):"
+echo "  cd ~/claude_code && bash scripts/smoke_test.sh"
+echo ""
+echo "  # Container (full Isaac Lab + Omniverse):"
+echo "  bash scripts/isaac_run.sh                                    # interactive shell"
+echo "  bash scripts/isaac_run.sh python -m omni_spot.train --num_envs 64  # training"
+echo "  bash scripts/smoke_test.sh --full                            # full smoke test"
 echo ""
 echo "Log saved to: $LOG_FILE"
