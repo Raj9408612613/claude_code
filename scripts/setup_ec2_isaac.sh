@@ -187,10 +187,10 @@ else
 fi
 
 cd "$REPO_DIR"
-git fetch origin nv-omni-spot-tr 2>/dev/null || true
-git checkout nv-omni-spot-tr 2>/dev/null || true
+git fetch origin claude/setup-isaac-sim-lab-VsKMa 2>/dev/null || true
+git checkout claude/setup-isaac-sim-lab-VsKMa 2>/dev/null || true
 cd "$HOME"
-echo ">>> Project repo ready at $REPO_DIR (branch: nv-omni-spot-tr)"
+echo ">>> Project repo ready at $REPO_DIR (branch: claude/setup-isaac-sim-lab-VsKMa)"
 
 # =============================================================================
 # STEP 4: Pull Isaac Sim Container (~15GB)
