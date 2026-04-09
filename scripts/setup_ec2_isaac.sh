@@ -46,13 +46,43 @@ if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
     echo "NVIDIA drivers already installed:"
     nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 else
-    echo "Installing NVIDIA drivers + CUDA toolkit..."
-    wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO}/x86_64/cuda-keyring_1.1-1_all.deb"
-    sudo dpkg -i cuda-keyring_1.1-1_all.deb
+    echo "Detecting GPU to choose correct driver..."
     sudo apt-get update -qq
-    sudo apt-get install -y cuda-drivers cuda-toolkit
+
+    # Check if GPU needs open kernel modules (Blackwell, L40S, newer GPUs)
+    GPU_PCI_ID=$(lspci -nn | grep -i nvidia | grep -oP '\[10de:\K[a-f0-9]+' | head -1)
+    echo "GPU PCI ID: 10de:${GPU_PCI_ID:-unknown}"
+
+    # Blackwell / L40S / Ada GPUs (device IDs 2b** and newer) need open kernel modules
+    # Older GPUs (A10G=2237, V100, T4, etc.) work with proprietary cuda-drivers
+    NEEDS_OPEN=false
+    if [[ -n "$GPU_PCI_ID" ]]; then
+        # Extract first 2 hex chars of device ID
+        GPU_PREFIX="${GPU_PCI_ID:0:2}"
+        case "$GPU_PREFIX" in
+            2b|2c|2d|2e|2f|30|31|32|33|34|35)
+                NEEDS_OPEN=true
+                echo "Detected newer GPU (Blackwell/L40S/Ada) — using open kernel modules"
+                ;;
+            *)
+                echo "Detected standard GPU — using proprietary drivers"
+                ;;
+        esac
+    fi
+
+    if $NEEDS_OPEN; then
+        # Open kernel modules for newer GPUs
+        sudo apt-get install -y nvidia-driver-590-open nvidia-utils-590
+    else
+        # Standard proprietary drivers (CUDA repo) for older GPUs
+        wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${CUDA_REPO}/x86_64/cuda-keyring_1.1-1_all.deb"
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+        sudo apt-get update -qq
+        sudo apt-get install -y cuda-drivers
+    fi
+
     echo "=============================================="
-    echo "  NVIDIA drivers + CUDA installed."
+    echo "  NVIDIA drivers installed."
     echo "  REBOOT REQUIRED."
     echo "  Run: sudo reboot"
     echo "  Then re-run this script."
