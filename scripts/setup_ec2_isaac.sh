@@ -187,10 +187,10 @@ else
 fi
 
 cd "$REPO_DIR"
-git fetch origin claude/setup-isaac-sim-lab-VsKMa 2>/dev/null || true
-git checkout claude/setup-isaac-sim-lab-VsKMa 2>/dev/null || true
+git fetch origin claude/setup-isaac-omniverse-CZUoD 2>/dev/null || true
+git checkout claude/setup-isaac-omniverse-CZUoD 2>/dev/null || true
 cd "$HOME"
-echo ">>> Project repo ready at $REPO_DIR (branch: claude/setup-isaac-sim-lab-VsKMa)"
+echo ">>> Project repo ready at $REPO_DIR (branch: claude/setup-isaac-omniverse-CZUoD)"
 
 # =============================================================================
 # STEP 4: Pull Isaac Sim Container (~15GB)
@@ -221,6 +221,81 @@ else
     sudo docker build -t "$CUSTOM_IMAGE" -f Dockerfile.isaac .
     cd "$HOME"
     echo "Custom image built: $CUSTOM_IMAGE"
+fi
+
+# =============================================================================
+# STEP 5b: Omniverse Nucleus Server (Docker-based)
+# =============================================================================
+echo ">>> Step 5b: Setting up Omniverse Nucleus server..."
+NUCLEUS_DIR="$HOME/omniverse/nucleus"
+NUCLEUS_COMPOSE="$NUCLEUS_DIR/docker-compose.yml"
+
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "nucleus"; then
+    echo "Nucleus already running."
+else
+    mkdir -p "$NUCLEUS_DIR"
+    cat > "$NUCLEUS_COMPOSE" << 'NUCLEUS_EOF'
+version: "3"
+services:
+  nucleus-server:
+    image: nvcr.io/nvidia/omniverse/nucleus-server:latest
+    container_name: nucleus-server
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - nucleus-data:/data
+    environment:
+      - ACCEPT_EULA=Y
+
+  nucleus-discovery:
+    image: nvcr.io/nvidia/omniverse/nucleus-discovery:latest
+    container_name: nucleus-discovery
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - nucleus-server
+
+volumes:
+  nucleus-data:
+NUCLEUS_EOF
+
+    echo "Starting Nucleus server (requires nvcr.io login)..."
+    sudo docker compose -f "$NUCLEUS_COMPOSE" up -d 2>/dev/null || \
+    sudo docker-compose -f "$NUCLEUS_COMPOSE" up -d 2>/dev/null || \
+    echo "WARNING: Nucleus startup failed — if nvcr.io login is needed run: sudo docker login nvcr.io"
+fi
+
+# =============================================================================
+# STEP 5c: NICE DCV (remote desktop for Omniverse GUI)
+# =============================================================================
+echo ">>> Step 5c: Installing NICE DCV..."
+if command -v dcv &>/dev/null; then
+    echo "NICE DCV already installed."
+else
+    sudo apt-get install -y ubuntu-desktop gdm3 xserver-xorg 2>/dev/null || \
+    echo "WARNING: Desktop packages install failed — DCV may not render GUI"
+
+    TMPDIR_DCV=$(mktemp -d)
+    wget -q -P "$TMPDIR_DCV" \
+        "https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-x86_64.tgz" || {
+        echo "WARNING: NICE DCV download failed — skipping remote desktop setup"
+        rm -rf "$TMPDIR_DCV"
+    }
+    if [ -f "$TMPDIR_DCV/nice-dcv-ubuntu2204-x86_64.tgz" ]; then
+        tar -xzf "$TMPDIR_DCV/nice-dcv-ubuntu2204-x86_64.tgz" -C "$TMPDIR_DCV"
+        cd "$TMPDIR_DCV"/nice-dcv-*-x86_64/
+        sudo apt-get install -y \
+            ./nice-dcv-server_*.deb \
+            ./nice-dcv-web-viewer_*.deb \
+            ./nice-xdcv_*.deb \
+            ./nice-dcv-gl_*.deb 2>/dev/null || true
+        sudo systemctl enable dcvserver
+        sudo systemctl start dcvserver
+        sudo dcv create-session --owner "${USER}" --type virtual my-session || true
+        echo "NICE DCV installed — connect via https://<public-ip>:8443"
+        cd "$HOME"
+        rm -rf "$TMPDIR_DCV"
+    fi
 fi
 
 # =============================================================================
@@ -370,6 +445,10 @@ echo -n "  Docker:          "; docker --version 2>/dev/null | awk '{print $3}' |
 echo -n "  GPU in Docker:   "; sudo docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "FAIL"
 echo -n "  Isaac Sim image: "; sudo docker image inspect "$ISAAC_IMAGE" &>/dev/null && echo "OK" || echo "NOT PULLED"
 echo -n "  Custom image:    "; sudo docker image inspect "$CUSTOM_IMAGE" &>/dev/null && echo "OK" || echo "NOT BUILT"
+echo -n "  Nucleus server:  "; docker ps --format '{{.Names}}' 2>/dev/null | grep -q nucleus && echo "RUNNING" || echo "NOT RUNNING (check: sudo docker ps)"
+echo ""
+echo "--- Remote Desktop ---"
+echo -n "  NICE DCV:        "; command -v dcv &>/dev/null && sudo systemctl is-active dcvserver 2>/dev/null && echo "RUNNING" || echo "NOT INSTALLED"
 
 # =============================================================================
 # SUMMARY
