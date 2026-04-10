@@ -15,7 +15,7 @@ from dataclasses import MISSING
 
 # Absolute path to Spot USD — works whether cwd is /workspace or /isaac-sim
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-SPOT_USD_PATH = os.path.join(_REPO_ROOT, "models", "spot_scene.usd")
+SPOT_USD_PATH = os.path.join(_REPO_ROOT, "models", "spot_omniverse.usd")
 
 from .config import (
     PHYSICS_DT, CONTROL_DT, PHYSICS_SUBSTEPS,
