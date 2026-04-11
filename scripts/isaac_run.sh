@@ -28,6 +28,19 @@ if ! sudo docker image inspect "$IMAGE_NAME" &>/dev/null; then
     exit 1
 fi
 
+# Persist Isaac Sim shader/kit/compute caches across container runs
+mkdir -p "$HOME/.isaac_cache/kit" \
+         "$HOME/.isaac_cache/ov" \
+         "$HOME/.isaac_cache/glcache" \
+         "$HOME/.isaac_cache/computecache"
+
+CACHE_VOLUMES=(
+    -v "$HOME/.isaac_cache/kit:/root/.cache/kit"
+    -v "$HOME/.isaac_cache/ov:/root/.nvidia-omniverse"
+    -v "$HOME/.isaac_cache/glcache:/root/.cache/nvidia/GLCache"
+    -v "$HOME/.isaac_cache/computecache:/root/.nv/ComputeCache"
+)
+
 # If no command given, start interactive shell
 if [ $# -eq 0 ]; then
     echo "Starting interactive Isaac Sim shell..."
@@ -37,6 +50,7 @@ if [ $# -eq 0 ]; then
         -e "ACCEPT_EULA=Y" \
         -v "$REPO_DIR":/workspace \
         -v "$HOME/omni_logs":/workspace/omni_logs \
+        "${CACHE_VOLUMES[@]}" \
         "$IMAGE_NAME" \
         /bin/bash
 else
@@ -49,6 +63,7 @@ else
             -e "ACCEPT_EULA=Y" \
             -v "$REPO_DIR":/workspace \
             -v "$HOME/omni_logs":/workspace/omni_logs \
+            "${CACHE_VOLUMES[@]}" \
             "$IMAGE_NAME" \
             /isaac-sim/python.sh "$@"
     else
@@ -56,6 +71,7 @@ else
             -e "ACCEPT_EULA=Y" \
             -v "$REPO_DIR":/workspace \
             -v "$HOME/omni_logs":/workspace/omni_logs \
+            "${CACHE_VOLUMES[@]}" \
             "$IMAGE_NAME" \
             "$@"
     fi
