@@ -6,8 +6,9 @@
 # Level 2 (--full):  Isaac Lab SpotNavEnv + PPO — requires USD + Isaac Sim
 #
 # Usage:
-#   bash scripts/smoke_test.sh          # Level 1 (mock env)
-#   bash scripts/smoke_test.sh --full   # Level 2 (Isaac Lab)
+#   bash scripts/smoke_test.sh                          # Level 1 (mock env)
+#   bash scripts/smoke_test.sh --full                   # Level 2 (Isaac Lab, 64 envs)
+#   NUM_ENVS=8 bash scripts/smoke_test.sh --full        # Level 2 with 8 envs
 # =============================================================================
 set -u
 
@@ -22,9 +23,9 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 export PYTHONPATH="$REPO_DIR"
 
 LEVEL="${1:-mock}"
-NUM_ENVS=64
-N_STEPS=128
-UPDATES=5
+NUM_ENVS="${NUM_ENVS:-64}"
+N_STEPS="${N_STEPS:-128}"
+UPDATES="${UPDATES:-5}"
 
 echo "=============================================="
 echo "  Smoke Test — $(date)"
