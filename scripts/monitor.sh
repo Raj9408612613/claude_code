@@ -1,4 +1,3 @@
-cat > ~/monitor.sh << 'EOF'
 #!/bin/bash
 LOG=~/hw_monitor.log
 INTERVAL=5  # seconds between samples
@@ -22,6 +21,3 @@ while true; do
 
     sleep $INTERVAL
 done
-EOF
-
-chmod +x ~/monitor.sh
