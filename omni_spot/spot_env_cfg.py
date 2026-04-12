@@ -35,6 +35,7 @@ _ISAAC_IMPORT_ERROR = None
 try:
     # Isaac Lab 2.0+ (standalone package)
     import isaaclab.sim as sim_utils
+    from isaaclab.actuators import ImplicitActuatorCfg
     from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
     from isaaclab.envs import DirectRLEnvCfg
     from isaaclab.scene import InteractiveSceneCfg
@@ -46,6 +47,7 @@ except ImportError:
     try:
         # Isaac Lab 1.x (omniverse extension)
         import omni.isaac.lab.sim as sim_utils
+        from omni.isaac.lab.actuators import ImplicitActuatorCfg
         from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
         from omni.isaac.lab.envs import DirectRLEnvCfg
         from omni.isaac.lab.scene import InteractiveSceneCfg
@@ -146,7 +148,7 @@ if HAS_ISAAC:
                 },
             ),
             actuators={
-                "legs": sim_utils.ImplicitActuatorCfg(
+                "legs": ImplicitActuatorCfg(
                     joint_names_expr=[".*"],
                     stiffness=500.0,     # kp matches MuJoCo
                     damping=40.0,        # kv matches MuJoCo
