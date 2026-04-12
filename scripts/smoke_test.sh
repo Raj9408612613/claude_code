@@ -102,6 +102,7 @@ if [[ "$LEVEL" == "--full" ]]; then
     # Run full training inside Isaac Sim container
     sudo docker run --rm --gpus all \
         -e "ACCEPT_EULA=Y" \
+        -e "PYTHONUNBUFFERED=1" \
         -v "$REPO_DIR":/workspace \
         -v "$HOME/omni_logs":/workspace/omni_logs \
         -v "$HOME/.isaac_cache/kit:/root/.cache/kit" \

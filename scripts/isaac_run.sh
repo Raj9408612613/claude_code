@@ -61,6 +61,7 @@ else
         shift
         sudo docker run --rm --gpus all \
             -e "ACCEPT_EULA=Y" \
+            -e "PYTHONUNBUFFERED=1" \
             -v "$REPO_DIR":/workspace \
             -v "$HOME/omni_logs":/workspace/omni_logs \
             "${CACHE_VOLUMES[@]}" \
@@ -69,6 +70,7 @@ else
     else
         sudo docker run --rm --gpus all \
             -e "ACCEPT_EULA=Y" \
+            -e "PYTHONUNBUFFERED=1" \
             -v "$REPO_DIR":/workspace \
             -v "$HOME/omni_logs":/workspace/omni_logs \
             "${CACHE_VOLUMES[@]}" \
