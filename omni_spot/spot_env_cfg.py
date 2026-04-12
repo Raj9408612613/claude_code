@@ -27,21 +27,36 @@ from .config import (
 )
 
 # NOTE: These imports require Isaac Lab to be installed.
-# They will fail in a plain Python env without Omniverse.
-# This file serves as the configuration specification.
+# Isaac Lab 2.0+ uses "isaaclab.*", older versions use "omni.isaac.lab.*".
+# Try both to support whatever version is installed in the container.
+HAS_ISAAC = False
+_ISAAC_IMPORT_ERROR = None
+
 try:
-    import omni.isaac.lab.sim as sim_utils
-    from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-    from omni.isaac.lab.envs import DirectRLEnvCfg
-    from omni.isaac.lab.scene import InteractiveSceneCfg
-    from omni.isaac.lab.sensors import CameraCfg, ContactSensorCfg
-    from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
-    from omni.isaac.lab.utils import configclass
+    # Isaac Lab 2.0+ (standalone package)
+    import isaaclab.sim as sim_utils
+    from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+    from isaaclab.envs import DirectRLEnvCfg
+    from isaaclab.scene import InteractiveSceneCfg
+    from isaaclab.sensors import CameraCfg, ContactSensorCfg
+    from isaaclab.sim import SimulationCfg, PhysxCfg
+    from isaaclab.utils import configclass
     HAS_ISAAC = True
-    _ISAAC_IMPORT_ERROR = None
-except ImportError as _e:
-    HAS_ISAAC = False
-    _ISAAC_IMPORT_ERROR = str(_e)
+except ImportError:
+    try:
+        # Isaac Lab 1.x (omniverse extension)
+        import omni.isaac.lab.sim as sim_utils
+        from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+        from omni.isaac.lab.envs import DirectRLEnvCfg
+        from omni.isaac.lab.scene import InteractiveSceneCfg
+        from omni.isaac.lab.sensors import CameraCfg, ContactSensorCfg
+        from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
+        from omni.isaac.lab.utils import configclass
+        HAS_ISAAC = True
+    except ImportError as _e:
+        _ISAAC_IMPORT_ERROR = str(_e)
+
+if not HAS_ISAAC:
     # Provide stub for development without Isaac Lab
     def configclass(cls):
         return cls
