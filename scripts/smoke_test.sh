@@ -100,7 +100,10 @@ if [[ "$LEVEL" == "--full" ]]; then
              "$HOME/.isaac_cache/computecache"
 
     # Run full training inside Isaac Sim container
+    # --entrypoint="" overrides the base image's ENTRYPOINT (/isaac-sim/runheadless.sh)
+    # which otherwise intercepts python.sh and launches Kit streaming instead of training
     sudo docker run --rm --gpus all \
+        --entrypoint="" \
         -e "ACCEPT_EULA=Y" \
         -e "PYTHONUNBUFFERED=1" \
         -v "$REPO_DIR":/workspace \
