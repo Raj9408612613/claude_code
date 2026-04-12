@@ -93,16 +93,26 @@ if [[ "$LEVEL" == "--full" ]]; then
         exit 1
     fi
 
+    # Persist shader/kit/compute caches across runs
+    mkdir -p "$HOME/.isaac_cache/kit" \
+             "$HOME/.isaac_cache/ov" \
+             "$HOME/.isaac_cache/glcache" \
+             "$HOME/.isaac_cache/computecache"
+
     # Run full training inside Isaac Sim container
     sudo docker run --rm --gpus all \
         -e "ACCEPT_EULA=Y" \
         -v "$REPO_DIR":/workspace \
         -v "$HOME/omni_logs":/workspace/omni_logs \
+        -v "$HOME/.isaac_cache/kit:/root/.cache/kit" \
+        -v "$HOME/.isaac_cache/ov:/root/.nvidia-omniverse" \
+        -v "$HOME/.isaac_cache/glcache:/root/.cache/nvidia/GLCache" \
+        -v "$HOME/.isaac_cache/computecache:/root/.nv/ComputeCache" \
         "$CUSTOM_IMAGE" \
         /isaac-sim/python.sh -m omni_spot.train \
-            --num_envs 64 \
-            --n_steps 128 \
-            --total_updates 5 \
+            --num_envs $NUM_ENVS \
+            --n_steps $N_STEPS \
+            --total_updates $UPDATES \
             --log_dir /workspace/smoke_test_output
 
     if [ $? -eq 0 ]; then
