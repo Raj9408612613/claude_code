@@ -38,8 +38,10 @@ try:
     from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
     from omni.isaac.lab.utils import configclass
     HAS_ISAAC = True
-except ImportError:
+    _ISAAC_IMPORT_ERROR = None
+except ImportError as _e:
     HAS_ISAAC = False
+    _ISAAC_IMPORT_ERROR = str(_e)
     # Provide stub for development without Isaac Lab
     def configclass(cls):
         return cls
@@ -346,12 +348,21 @@ if HAS_ISAAC:
         episode_length_s = 1000 * CONTROL_DT  # 1000 steps * 0.02s = 20s
 
 else:
-    # Stubs when Isaac Lab is not installed (for testing imports)
+    # Stubs when Isaac Lab is not installed — raise ImportError on use
+    # so train.py's except ImportError catches it and shows the real cause
+    def _raise():
+        raise ImportError(
+            f"omni.isaac.lab is not available.\n"
+            f"  Root cause: {_ISAAC_IMPORT_ERROR}\n"
+            f"  Verify Isaac Lab is installed: "
+            f"/isaac-sim/python.sh -c \"import omni.isaac.lab; print('OK')\""
+        )
+
     class SpotSimCfg:
-        pass
+        def __init__(self, *a, **kw): _raise()
 
     class SpotSceneCfg:
-        pass
+        def __init__(self, *a, **kw): _raise()
 
     class SpotNavEnvCfg:
-        pass
+        def __init__(self, *a, **kw): _raise()

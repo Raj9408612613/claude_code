@@ -139,16 +139,22 @@ def main():
     t0 = time.time()
 
     try:
-        from .spot_env_cfg import SpotNavEnvCfg
+        from .spot_env_cfg import SpotNavEnvCfg, HAS_ISAAC, _ISAAC_IMPORT_ERROR
         from .spot_env import SpotNavEnv
         from .physics_tuning import apply_tuning
+
+        if not HAS_ISAAC:
+            print(f"[ERROR] Isaac Lab import failed: {_ISAAC_IMPORT_ERROR}")
+            print("        Run this to diagnose:")
+            print("          /isaac-sim/python.sh -c \"import omni.isaac.lab; print('OK')\"")
+            sys.exit(1)
 
         env_cfg = SpotNavEnvCfg()
         env_cfg.scene.num_envs = args.num_envs
         apply_tuning(env_cfg.sim, env_cfg.scene)
         env = SpotNavEnv(cfg=env_cfg)
-    except ImportError:
-        print("[ERROR] Isaac Lab not available. Install Omniverse + Isaac Lab.")
+    except ImportError as e:
+        print(f"[ERROR] Isaac Lab not available: {e}")
         print("        This training script requires a full Isaac Lab installation.")
         sys.exit(1)
 
