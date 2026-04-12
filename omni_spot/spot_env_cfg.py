@@ -76,8 +76,7 @@ if HAS_ISAAC:
         gravity = (0.0, 0.0, -9.81)
 
         physx: PhysxCfg = PhysxCfg(
-            # GPU-accelerated solver
-            use_gpu=True,
+            # GPU solver is the default in Isaac Lab 0.54+
             solver_type=1,                 # TGS solver (better for articulations)
             max_position_iteration_count=8,
             max_velocity_iteration_count=1,

@@ -262,6 +262,12 @@ def main():
     logger.close()
     print(f"\n[DONE] Training complete. {total_timesteps:,} total timesteps.")
 
+    # Write success marker (smoke_test.sh checks this to avoid false positives
+    # from Isaac Sim's shutdown masking the Python exit code)
+    marker = os.path.join(args.log_dir, "SUCCESS")
+    with open(marker, "w") as f:
+        f.write(f"{total_timesteps}\n")
+
     # Shut down Isaac Sim
     simulation_app.close()
 

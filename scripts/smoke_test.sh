@@ -119,12 +119,18 @@ if [[ "$LEVEL" == "--full" ]]; then
             --total_updates $UPDATES \
             --log_dir /workspace/smoke_test_output
 
-    if [ $? -eq 0 ]; then
+    DOCKER_EXIT=$?
+
+    # Check for success marker written by train.py on completion.
+    # Isaac Sim's shutdown can mask the Python exit code (exit 0 despite crash),
+    # so we verify training actually finished.
+    if [ -f "$REPO_DIR/smoke_test_output/SUCCESS" ]; then
         echo ""
         echo "  [PASS] Level 2: Isaac Lab smoke test passed (via Docker container)"
+        rm -f "$REPO_DIR/smoke_test_output/SUCCESS"
     else
         echo ""
-        echo "  [FAIL] Level 2: Isaac Lab smoke test failed"
+        echo "  [FAIL] Level 2: Isaac Lab smoke test failed (docker exit=$DOCKER_EXIT, no SUCCESS marker)"
         exit 1
     fi
 else
