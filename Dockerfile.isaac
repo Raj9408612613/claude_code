@@ -46,5 +46,9 @@ RUN /isaac-sim/python.sh -m pip install tensorboard "imageio[ffmpeg]"
 WORKDIR /workspace
 ENV PYTHONPATH="/workspace"
 
+# Override base image ENTRYPOINT (/isaac-sim/runheadless.sh) which
+# launches Kit streaming and ignores the user command
+ENTRYPOINT []
+
 # Default: interactive bash
 CMD ["/bin/bash"]

@@ -47,6 +47,7 @@ if [ $# -eq 0 ]; then
     echo "  Use /isaac-sim/python.sh for Isaac Sim Python"
     echo "  Project mounted at /workspace"
     sudo docker run --rm -it --gpus all \
+        --entrypoint="" \
         -e "ACCEPT_EULA=Y" \
         -v "$REPO_DIR":/workspace \
         -v "$HOME/omni_logs":/workspace/omni_logs \
@@ -60,6 +61,7 @@ else
     if [[ "$1" == "python" ]]; then
         shift
         sudo docker run --rm --gpus all \
+            --entrypoint="" \
             -e "ACCEPT_EULA=Y" \
             -e "PYTHONUNBUFFERED=1" \
             -v "$REPO_DIR":/workspace \
@@ -69,6 +71,7 @@ else
             /isaac-sim/python.sh "$@"
     else
         sudo docker run --rm --gpus all \
+            --entrypoint="" \
             -e "ACCEPT_EULA=Y" \
             -e "PYTHONUNBUFFERED=1" \
             -v "$REPO_DIR":/workspace \
