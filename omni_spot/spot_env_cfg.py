@@ -356,9 +356,9 @@ if HAS_ISAAC:
             env_spacing=5.0,                # 5m between env origins
         )
 
-        # Spaces
-        num_observations = PROPRIO_DIM       # 37 (depth handled separately via cameras)
-        num_actions = ACTION_DIM             # 12
+        # Spaces (renamed from num_observations/num_actions in Isaac Lab 0.54)
+        observation_space = PROPRIO_DIM      # 37 (depth handled separately via cameras)
+        action_space = ACTION_DIM            # 12
 
         # Episode
         episode_length_s = 1000 * CONTROL_DT  # 1000 steps * 0.02s = 20s
