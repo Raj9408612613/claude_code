@@ -27,19 +27,38 @@ from .config import (
 )
 
 # NOTE: These imports require Isaac Lab to be installed.
-# They will fail in a plain Python env without Omniverse.
-# This file serves as the configuration specification.
+# Isaac Lab 2.0+ uses "isaaclab.*", older versions use "omni.isaac.lab.*".
+# Try both to support whatever version is installed in the container.
+HAS_ISAAC = False
+_ISAAC_IMPORT_ERROR = None
+
 try:
-    import omni.isaac.lab.sim as sim_utils
-    from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-    from omni.isaac.lab.envs import DirectRLEnvCfg
-    from omni.isaac.lab.scene import InteractiveSceneCfg
-    from omni.isaac.lab.sensors import CameraCfg, ContactSensorCfg
-    from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
-    from omni.isaac.lab.utils import configclass
+    # Isaac Lab 2.0+ (standalone package)
+    import isaaclab.sim as sim_utils
+    from isaaclab.actuators import ImplicitActuatorCfg
+    from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+    from isaaclab.envs import DirectRLEnvCfg
+    from isaaclab.scene import InteractiveSceneCfg
+    from isaaclab.sensors import CameraCfg, ContactSensorCfg
+    from isaaclab.sim import SimulationCfg, PhysxCfg
+    from isaaclab.utils import configclass
     HAS_ISAAC = True
 except ImportError:
-    HAS_ISAAC = False
+    try:
+        # Isaac Lab 1.x (omniverse extension)
+        import omni.isaac.lab.sim as sim_utils
+        from omni.isaac.lab.actuators import ImplicitActuatorCfg
+        from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+        from omni.isaac.lab.envs import DirectRLEnvCfg
+        from omni.isaac.lab.scene import InteractiveSceneCfg
+        from omni.isaac.lab.sensors import CameraCfg, ContactSensorCfg
+        from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
+        from omni.isaac.lab.utils import configclass
+        HAS_ISAAC = True
+    except ImportError as _e:
+        _ISAAC_IMPORT_ERROR = str(_e)
+
+if not HAS_ISAAC:
     # Provide stub for development without Isaac Lab
     def configclass(cls):
         return cls
@@ -59,8 +78,7 @@ if HAS_ISAAC:
         gravity = (0.0, 0.0, -9.81)
 
         physx: PhysxCfg = PhysxCfg(
-            # GPU-accelerated solver
-            use_gpu=True,
+            # GPU solver is the default in Isaac Lab 0.54+
             solver_type=1,                 # TGS solver (better for articulations)
             max_position_iteration_count=8,
             max_velocity_iteration_count=1,
@@ -130,7 +148,7 @@ if HAS_ISAAC:
                 },
             ),
             actuators={
-                "legs": sim_utils.ImplicitActuatorCfg(
+                "legs": ImplicitActuatorCfg(
                     joint_names_expr=[".*"],
                     stiffness=500.0,     # kp matches MuJoCo
                     damping=40.0,        # kv matches MuJoCo
@@ -338,20 +356,29 @@ if HAS_ISAAC:
             env_spacing=5.0,                # 5m between env origins
         )
 
-        # Spaces
-        num_observations = PROPRIO_DIM       # 37 (depth handled separately via cameras)
-        num_actions = ACTION_DIM             # 12
+        # Spaces (renamed from num_observations/num_actions in Isaac Lab 0.54)
+        observation_space = PROPRIO_DIM      # 37 (depth handled separately via cameras)
+        action_space = ACTION_DIM            # 12
 
         # Episode
         episode_length_s = 1000 * CONTROL_DT  # 1000 steps * 0.02s = 20s
 
 else:
-    # Stubs when Isaac Lab is not installed (for testing imports)
+    # Stubs when Isaac Lab is not installed — raise ImportError on use
+    # so train.py's except ImportError catches it and shows the real cause
+    def _raise():
+        raise ImportError(
+            f"omni.isaac.lab is not available.\n"
+            f"  Root cause: {_ISAAC_IMPORT_ERROR}\n"
+            f"  Verify Isaac Lab is installed: "
+            f"/isaac-sim/python.sh -c \"import omni.isaac.lab; print('OK')\""
+        )
+
     class SpotSimCfg:
-        pass
+        def __init__(self, *a, **kw): _raise()
 
     class SpotSceneCfg:
-        pass
+        def __init__(self, *a, **kw): _raise()
 
     class SpotNavEnvCfg:
-        pass
+        def __init__(self, *a, **kw): _raise()

@@ -29,11 +29,16 @@ _OBS_SCENE_KEYS = (
 from .reward import compute_reward, check_termination
 
 try:
-    from omni.isaac.lab.envs import DirectRLEnv
+    from isaaclab.envs import DirectRLEnv
     from .spot_env_cfg import SpotNavEnvCfg
     HAS_ISAAC = True
 except ImportError:
-    HAS_ISAAC = False
+    try:
+        from omni.isaac.lab.envs import DirectRLEnv
+        from .spot_env_cfg import SpotNavEnvCfg
+        HAS_ISAAC = True
+    except ImportError:
+        HAS_ISAAC = False
 
 
 if HAS_ISAAC:

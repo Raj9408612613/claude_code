@@ -3,11 +3,15 @@ Omniverse Isaac Lab Training Entry Point — Spot Navigation
 ============================================================
 Ported from mjx_train.py. Uses PyTorch + Isaac Lab.
 
+IMPORTANT: Isaac Lab sub-modules (isaaclab.sim, isaaclab.envs, etc.)
+require the Omniverse simulation app to be running. We must launch it
+via AppLauncher BEFORE importing any Isaac Lab config/env classes.
+
 Usage (requires Isaac Lab / Omniverse):
-    python -m omni_spot.train --num_envs 4096 --n_steps 2048 --total_updates 500
+    /isaac-sim/python.sh -m omni_spot.train --num_envs 4096 --n_steps 2048 --total_updates 500
 
 For quick smoke test:
-    python -m omni_spot.train --num_envs 64 --n_steps 128 --total_updates 5
+    /isaac-sim/python.sh -m omni_spot.train --num_envs 64 --n_steps 128 --total_updates 5
 """
 
 import argparse
@@ -18,34 +22,53 @@ import csv
 import json
 from datetime import datetime
 
+# ── Step 1: Launch Isaac Sim BEFORE importing Isaac Lab sub-modules ──
+# This MUST happen before any 'from isaaclab.sim import ...' etc.
+print("[INIT] Launching Isaac Sim (first run takes ~5 min for shader compilation)...")
+try:
+    from isaaclab.app import AppLauncher
+except ImportError:
+    try:
+        from omni.isaac.lab.app import AppLauncher
+    except ImportError:
+        print("[ERROR] Cannot import AppLauncher from isaaclab or omni.isaac.lab")
+        print("        Is Isaac Lab installed? pip list | grep isaaclab")
+        sys.exit(1)
+
+_parser = argparse.ArgumentParser(description="Spot Navigation RL — Isaac Lab")
+# Environment
+_parser.add_argument("--num_envs",      type=int,   default=4096)
+_parser.add_argument("--n_steps",       type=int,   default=2048,
+                     help="Rollout steps per update")
+# Training
+_parser.add_argument("--total_updates", type=int,   default=500)
+_parser.add_argument("--lr",            type=float, default=3e-4)
+_parser.add_argument("--seed",          type=int,   default=42)
+# Logging
+_parser.add_argument("--log_interval",  type=int,   default=1)
+_parser.add_argument("--save_interval", type=int,   default=50)
+_parser.add_argument("--log_dir",       type=str,   default="omni_logs")
+# Resume
+_parser.add_argument("--resume",        type=str,   default=None,
+                     help="Path to checkpoint to resume from")
+# Profiling
+_parser.add_argument("--profile",       type=int,   default=0, metavar="N",
+                     help="Profile first N updates with per-component timing")
+# AppLauncher adds --headless, --device, --enable_cameras, etc.
+AppLauncher.add_app_launcher_args(_parser)
+args = _parser.parse_args()
+
+# Launch the simulation app (starts Kit, loads extensions, compiles shaders)
+app_launcher = AppLauncher(args)
+simulation_app = app_launcher.app
+print("[INIT] Isaac Sim launched successfully.")
+
+# ── Step 2: NOW safe to import Isaac Lab sub-modules & PyTorch ───────
 import torch
 
 from .config import LR
 from .ppo import PPOTrainer
 from .diagnostics import print_diagnostics
-
-
-def parse_args():
-    p = argparse.ArgumentParser(description="Spot Navigation RL — Isaac Lab")
-    # Environment
-    p.add_argument("--num_envs",      type=int,   default=4096)
-    p.add_argument("--n_steps",       type=int,   default=2048,
-                   help="Rollout steps per update")
-    # Training
-    p.add_argument("--total_updates", type=int,   default=500)
-    p.add_argument("--lr",            type=float, default=LR)
-    p.add_argument("--seed",          type=int,   default=42)
-    # Logging
-    p.add_argument("--log_interval",  type=int,   default=1)
-    p.add_argument("--save_interval", type=int,   default=50)
-    p.add_argument("--log_dir",       type=str,   default="omni_logs")
-    # Resume
-    p.add_argument("--resume",        type=str,   default=None,
-                   help="Path to checkpoint to resume from")
-    # Profiling
-    p.add_argument("--profile",       type=int,   default=0, metavar="N",
-                   help="Profile first N updates with per-component timing")
-    return p.parse_args()
 
 
 class SimpleLogger:
@@ -122,7 +145,7 @@ def report_gpu_memory(label=""):
 
 
 def main():
-    args = parse_args()
+    # args already parsed at module level (before AppLauncher)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     print(f"{'='*60}")
@@ -135,22 +158,23 @@ def main():
     logger = SimpleLogger(args.log_dir, run_id)
 
     # ── Environment (Isaac Lab) ─────────────────────────────────────
+    # Simulation app is already running (launched at module level).
+    # Now Isaac Lab sub-module imports will work.
     print("[INIT] Creating Isaac Lab environment...")
     t0 = time.time()
 
-    try:
-        from .spot_env_cfg import SpotNavEnvCfg
-        from .spot_env import SpotNavEnv
-        from .physics_tuning import apply_tuning
+    from .spot_env_cfg import SpotNavEnvCfg, HAS_ISAAC, _ISAAC_IMPORT_ERROR
+    from .spot_env import SpotNavEnv
+    from .physics_tuning import apply_tuning
 
-        env_cfg = SpotNavEnvCfg()
-        env_cfg.scene.num_envs = args.num_envs
-        apply_tuning(env_cfg.sim, env_cfg.scene)
-        env = SpotNavEnv(cfg=env_cfg)
-    except ImportError:
-        print("[ERROR] Isaac Lab not available. Install Omniverse + Isaac Lab.")
-        print("        This training script requires a full Isaac Lab installation.")
+    if not HAS_ISAAC:
+        print(f"[ERROR] Isaac Lab import failed: {_ISAAC_IMPORT_ERROR}")
         sys.exit(1)
+
+    env_cfg = SpotNavEnvCfg()
+    env_cfg.scene.num_envs = args.num_envs
+    apply_tuning(env_cfg.sim, env_cfg.scene)
+    env = SpotNavEnv(cfg=env_cfg)
 
     print(f"[INIT] Environment created in {time.time()-t0:.1f}s")
     report_gpu_memory("after env creation")
@@ -237,6 +261,15 @@ def main():
     trainer.save(os.path.join(logger.log_dir, "final.pt"))
     logger.close()
     print(f"\n[DONE] Training complete. {total_timesteps:,} total timesteps.")
+
+    # Write success marker (smoke_test.sh checks this to avoid false positives
+    # from Isaac Sim's shutdown masking the Python exit code)
+    marker = os.path.join(args.log_dir, "SUCCESS")
+    with open(marker, "w") as f:
+        f.write(f"{total_timesteps}\n")
+
+    # Shut down Isaac Sim
+    simulation_app.close()
 
 
 if __name__ == "__main__":

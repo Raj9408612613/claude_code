@@ -3,20 +3,14 @@
 # Smoke Test — Validates training pipeline end-to-end
 # =============================================================================
 # Level 1 (default): MockSpotEnv + PPO — no Omniverse needed
-# Level 2 (--full):  Isaac Lab SpotNavEnv + PPO — requires USD + Isaac Sim
+# Level 2 (--full):  Isaac Lab SpotNavEnv + PPO only — skips Level 1
 #
 # Usage:
 #   bash scripts/smoke_test.sh                          # Level 1 (mock env)
-#   bash scripts/smoke_test.sh --full                   # Level 2 (Isaac Lab, 64 envs)
+#   bash scripts/smoke_test.sh --full                   # Level 2 only (Isaac Lab)
 #   NUM_ENVS=8 bash scripts/smoke_test.sh --full        # Level 2 with 8 envs
 # =============================================================================
 set -u
-
-# ── Ensure conda env is active ──────────────────────────────────────────────
-if [[ "${CONDA_DEFAULT_ENV:-}" != "isaaclab" ]]; then
-    eval "$($HOME/miniconda3/bin/conda shell.bash hook)" 2>/dev/null || true
-    conda activate isaaclab 2>/dev/null || true
-fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
@@ -32,11 +26,18 @@ echo "  Smoke Test — $(date)"
 echo "=============================================="
 echo ""
 
-# ── Level 1: Mock Environment ───────────────────────────────────────────────
-echo ">>> Level 1: MockSpotEnv + PPO ($NUM_ENVS envs, $N_STEPS steps, $UPDATES updates)"
-echo ""
+# ── Level 1: Mock Environment (default, skipped with --full) ────────────────
+if [[ "$LEVEL" != "--full" ]]; then
+    # ── Ensure conda env is active ───────────────────────────────────────────
+    if [[ "${CONDA_DEFAULT_ENV:-}" != "isaaclab" ]]; then
+        eval "$($HOME/miniconda3/bin/conda shell.bash hook)" 2>/dev/null || true
+        conda activate isaaclab 2>/dev/null || true
+    fi
 
-python -c "
+    echo ">>> Level 1: MockSpotEnv + PPO ($NUM_ENVS envs, $N_STEPS steps, $UPDATES updates)"
+    echo ""
+
+    python -c "
 import time, torch
 from omni_spot.mock_env import MockSpotEnv
 from omni_spot.ppo import PPOTrainer
@@ -65,43 +66,37 @@ print()
 print('  [PASS] Level 1: Mock environment smoke test passed')
 "
 
-LEVEL1_OK=$?
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "  [FAIL] Level 1 failed. Fix errors above before proceeding."
+        exit 1
+    fi
 
-if [ $LEVEL1_OK -ne 0 ]; then
     echo ""
-    echo "  [FAIL] Level 1 failed. Fix errors above before proceeding."
-    exit 1
-fi
+    echo "  Skipping Level 2 (Isaac Lab). Use --full to run it."
 
-# ── Level 2: Full Isaac Lab (only if --full) ────────────────────────────────
-if [[ "$LEVEL" == "--full" ]]; then
-    echo ""
-    echo ">>> Level 2: Isaac Lab SpotNavEnv + PPO (64 envs, 128 steps, 5 updates)"
+# ── Level 2: Full Isaac Lab (--full only) ────────────────────────────────────
+else
+    echo ">>> Level 2: Isaac Lab SpotNavEnv + PPO ($NUM_ENVS envs, $N_STEPS steps, $UPDATES updates)"
     echo ""
 
     CUSTOM_IMAGE="isaac-lab-spot:latest"
 
-    # Check Docker image exists
     if ! sudo docker image inspect "$CUSTOM_IMAGE" &>/dev/null; then
         echo "  [FAIL] Docker image '$CUSTOM_IMAGE' not found. Run setup_ec2_isaac.sh first."
         exit 1
     fi
 
-    # Check USD file exists
     if [ ! -f "$REPO_DIR/models/spot_scene.usd" ]; then
         echo "  [FAIL] models/spot_scene.usd not found. Run MJCF→USD conversion first."
         exit 1
     fi
 
-    # Persist shader/kit/compute caches across runs
     mkdir -p "$HOME/.isaac_cache/kit" \
              "$HOME/.isaac_cache/ov" \
              "$HOME/.isaac_cache/glcache" \
              "$HOME/.isaac_cache/computecache"
 
-    # Run full training inside Isaac Sim container
-    # --entrypoint="" overrides the base image's ENTRYPOINT (/isaac-sim/runheadless.sh)
-    # which otherwise intercepts python.sh and launches Kit streaming instead of training
     sudo docker run --rm --gpus all \
         --entrypoint="" \
         -e "ACCEPT_EULA=Y" \
@@ -119,17 +114,17 @@ if [[ "$LEVEL" == "--full" ]]; then
             --total_updates $UPDATES \
             --log_dir /workspace/smoke_test_output
 
-    if [ $? -eq 0 ]; then
+    DOCKER_EXIT=$?
+
+    if [ -f "$REPO_DIR/smoke_test_output/SUCCESS" ]; then
         echo ""
         echo "  [PASS] Level 2: Isaac Lab smoke test passed (via Docker container)"
+        rm -f "$REPO_DIR/smoke_test_output/SUCCESS"
     else
         echo ""
-        echo "  [FAIL] Level 2: Isaac Lab smoke test failed"
+        echo "  [FAIL] Level 2: Isaac Lab smoke test failed (docker exit=$DOCKER_EXIT, no SUCCESS marker)"
         exit 1
     fi
-else
-    echo ""
-    echo "  Skipping Level 2 (Isaac Lab). Use --full to run it."
 fi
 
 echo ""

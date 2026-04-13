@@ -221,7 +221,10 @@ def get_ground_material_cfg():
         )
     """
     try:
-        import omni.isaac.lab.sim as sim_utils
+        try:
+            import isaaclab.sim as sim_utils
+        except ImportError:
+            import omni.isaac.lab.sim as sim_utils
         t = PHYSX_TUNING
         return sim_utils.RigidBodyMaterialCfg(
             static_friction=t["ground_static_friction"],
@@ -243,7 +246,10 @@ def get_foot_material_cfg():
             apply_material(foot_prim_path, get_foot_material_cfg())
     """
     try:
-        import omni.isaac.lab.sim as sim_utils
+        try:
+            import isaaclab.sim as sim_utils
+        except ImportError:
+            import omni.isaac.lab.sim as sim_utils
         t = PHYSX_TUNING
         return sim_utils.RigidBodyMaterialCfg(
             static_friction=t["foot_static_friction"],
