@@ -15,7 +15,7 @@ from dataclasses import MISSING
 
 # Absolute path to Spot USD — works whether cwd is /workspace or /isaac-sim
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-SPOT_USD_PATH = os.path.join(_REPO_ROOT, "models", "spot_omniverse.usd")
+SPOT_USD_PATH = os.path.join(_REPO_ROOT, "models", "spot_scene.usd")
 
 from .config import (
     PHYSICS_DT, CONTROL_DT, PHYSICS_SUBSTEPS,
@@ -232,7 +232,7 @@ if HAS_ISAAC:
         # ── Depth cameras (5 cameras on Spot body) ──────────────────
         # Each camera matches: 120x160 pixels, 87 deg HFOV, depth only
         cam_front_center = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_center",
+            prim_path="{ENV_REGEX_NS}/Robot/base_link/cam_front_center",
             update_period=CONTROL_DT,
             height=CAM_H,
             width=CAM_W,
@@ -244,7 +244,7 @@ if HAS_ISAAC:
             ),
         )
         cam_front_left = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_left",
+            prim_path="{ENV_REGEX_NS}/Robot/base_link/cam_front_left",
             update_period=CONTROL_DT,
             height=CAM_H,
             width=CAM_W,
@@ -256,7 +256,7 @@ if HAS_ISAAC:
             ),
         )
         cam_front_right = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_right",
+            prim_path="{ENV_REGEX_NS}/Robot/base_link/cam_front_right",
             update_period=CONTROL_DT,
             height=CAM_H,
             width=CAM_W,
@@ -268,7 +268,7 @@ if HAS_ISAAC:
             ),
         )
         cam_rear_left = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_left",
+            prim_path="{ENV_REGEX_NS}/Robot/base_link/cam_rear_left",
             update_period=CONTROL_DT,
             height=CAM_H,
             width=CAM_W,
@@ -280,7 +280,7 @@ if HAS_ISAAC:
             ),
         )
         cam_rear_right = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_right",
+            prim_path="{ENV_REGEX_NS}/Robot/base_link/cam_rear_right",
             update_period=CONTROL_DT,
             height=CAM_H,
             width=CAM_W,
