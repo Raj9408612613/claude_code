@@ -199,7 +199,7 @@ def apply_tuning(sim_cfg, scene_cfg):
     # Robot actuator gains
     scene_cfg.robot.actuators["legs"].stiffness = t["joint_stiffness"]
     scene_cfg.robot.actuators["legs"].damping = t["joint_damping"]
-    scene_cfg.robot.actuators["legs"].effort_limit = t["effort_limit"]
+    scene_cfg.robot.actuators["legs"].effort_limit_sim = t["effort_limit"]
 
     print("[physics_tuning] Applied PhysX tuning:")
     print(f"  Solver iters: pos={t['solver_position_iters']}, vel={t['solver_velocity_iters']}")

@@ -40,7 +40,7 @@ try:
     from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
     from isaaclab.envs import DirectRLEnvCfg
     from isaaclab.scene import InteractiveSceneCfg
-    from isaaclab.sensors import CameraCfg, ContactSensorCfg
+    from isaaclab.sensors import CameraCfg
     from isaaclab.sim import SimulationCfg, PhysxCfg
     from isaaclab.utils import configclass
     # Terrain imports — all re-exported from isaaclab.terrains top-level
@@ -63,7 +63,7 @@ except ImportError:
         from omni.isaac.lab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
         from omni.isaac.lab.envs import DirectRLEnvCfg
         from omni.isaac.lab.scene import InteractiveSceneCfg
-        from omni.isaac.lab.sensors import CameraCfg, ContactSensorCfg
+        from omni.isaac.lab.sensors import CameraCfg
         from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
         from omni.isaac.lab.utils import configclass
         HAS_ISAAC = True
@@ -222,9 +222,9 @@ if HAS_ISAAC:
             actuators={
                 "legs": ImplicitActuatorCfg(
                     joint_names_expr=[".*"],
-                    stiffness=500.0,     # kp matches MuJoCo
-                    damping=40.0,        # kv matches MuJoCo
-                    effort_limit=1000.0,
+                    stiffness=500.0,      # kp matches MuJoCo
+                    damping=40.0,         # kv matches MuJoCo
+                    effort_limit_sim=1000.0,
                 ),
             },
         )
@@ -362,13 +362,8 @@ if HAS_ISAAC:
     _obs_cfgs = _build_obstacle_cfgs()
     for _name, _cfg in _obs_cfgs.items():
         setattr(SpotSceneCfg, _name, _cfg)
-    # ── Contact sensor on robot (detects collisions with obstacles) ────
-    SpotSceneCfg.contact_sensor = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*",
-        update_period=0.0,   # every physics step
-        history_length=1,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/obs_.*"],
-    )
+    # Note: no ContactSensorCfg — collision detection uses distance-based
+    # math in SpotNavEnv._get_rewards() (min_obs_dist < 0.35), not sensor data.
     # ════════════════════════════════════════════════════════════════════════
     # ENVIRONMENT CONFIG
     # ════════════════════════════════════════════════════════════════════════
