@@ -43,24 +43,16 @@ try:
     from isaaclab.sensors import CameraCfg, ContactSensorCfg
     from isaaclab.sim import SimulationCfg, PhysxCfg
     from isaaclab.utils import configclass
-    # Terrain imports (Isaac Lab 0.54+)
-    from isaaclab.terrains import TerrainImporterCfg
-    try:
-        from isaaclab.terrains import TerrainGeneratorCfg
-    except ImportError:
-        from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
-    try:
-        from isaaclab.terrains.height_field import (
-            HfRandomUniformTerrainCfg,
-            HfPyramidStairsTerrainCfg,
-            HfInvertedPyramidStairsTerrainCfg,
-        )
-    except ImportError:
-        from isaaclab.terrains.height_field.hf_terrains_cfg import (
-            HfRandomUniformTerrainCfg,
-            HfPyramidStairsTerrainCfg,
-            HfInvertedPyramidStairsTerrainCfg,
-        )
+    # Terrain imports — all re-exported from isaaclab.terrains top-level
+    # (isaaclab/terrains/__init__.py does wildcard imports from height_field)
+    # Verified against Isaac Lab main branch source.
+    from isaaclab.terrains import (
+        TerrainImporterCfg,
+        TerrainGeneratorCfg,
+        HfRandomUniformTerrainCfg,
+        HfPyramidStairsTerrainCfg,
+        HfInvertedPyramidStairsTerrainCfg,  # confirmed class name in hf_terrains_cfg.py
+    )
     HAS_ISAAC = True
     HAS_TERRAIN = True
 except ImportError:
