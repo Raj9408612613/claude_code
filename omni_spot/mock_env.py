@@ -145,16 +145,12 @@ class MockSpotEnv:
         OFF = torch.tensor([100.0, 0.0, 0.5], device=self.device)
         obs_pos[:, :n_non_human] = torch.where(mask.unsqueeze(-1), obs_pos[:, :n_non_human], OFF)
 
-        patrol_r = HUMANOID_OBSTACLE["patrol_radius"]
-        hx = torch.clamp(goal_xy[:, 0] + patrol_r, -ROOM_HALF, ROOM_HALF)
-        hy = torch.clamp(goal_xy[:, 1], -ROOM_HALF, ROOM_HALF)
-        obs_pos[:, HUMANOID_MOCAP_IDX, 0] = hx
-        obs_pos[:, HUMANOID_MOCAP_IDX, 1] = hy
-        obs_pos[:, HUMANOID_MOCAP_IDX, 2] = HUMANOID_OBSTACLE["mocap_z"]
-
+        # Humanoid disabled — send its slot off-scene so it doesn't affect distances
+        obs_pos[:, HUMANOID_MOCAP_IDX] = torch.tensor(
+            [1000.0, 0.0, 0.5], device=self.device
+        )
         self._obs_pos[env_ids] = obs_pos
-        self._human_pos[env_ids, 0] = hx
-        self._human_pos[env_ids, 1] = hy
+        self._human_pos[env_ids] = 1000.0
         self._human_wp_idx[env_ids] = 0
 
     def step(self, action: torch.Tensor):

@@ -22,8 +22,9 @@ from .config import (
     JOINT_LOWER, JOINT_UPPER, STANDING_POSE, TARGET_HEIGHT,
     N_CAMS, CAM_H, CAM_W, H_FOV, V_FOV, MIN_DEPTH, MAX_DEPTH,
     N_STATIC, N_DYNAMIC, N_HUMANOID, N_OBS, OBS_HALF_SIZES,
-    ROOM_HALF, HUMANOID_OBSTACLE,
+    HUMANOID_OBSTACLE,
     ACTION_DIM, PROPRIO_DIM,
+    PATCH_SIZE, TERRAIN_ROWS, TERRAIN_COLS,
 )
 
 # NOTE: These imports require Isaac Lab to be installed.
@@ -42,7 +43,26 @@ try:
     from isaaclab.sensors import CameraCfg, ContactSensorCfg
     from isaaclab.sim import SimulationCfg, PhysxCfg
     from isaaclab.utils import configclass
+    # Terrain imports (Isaac Lab 0.54+)
+    from isaaclab.terrains import TerrainImporterCfg
+    try:
+        from isaaclab.terrains import TerrainGeneratorCfg
+    except ImportError:
+        from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
+    try:
+        from isaaclab.terrains.height_field import (
+            HfRandomUniformTerrainCfg,
+            HfPyramidStairsTerrainCfg,
+            HfInvertedPyramidStairsTerrainCfg,
+        )
+    except ImportError:
+        from isaaclab.terrains.height_field.hf_terrains_cfg import (
+            HfRandomUniformTerrainCfg,
+            HfPyramidStairsTerrainCfg,
+            HfInvertedPyramidStairsTerrainCfg,
+        )
     HAS_ISAAC = True
+    HAS_TERRAIN = True
 except ImportError:
     try:
         # Isaac Lab 1.x (omniverse extension)
@@ -55,8 +75,10 @@ except ImportError:
         from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
         from omni.isaac.lab.utils import configclass
         HAS_ISAAC = True
+        HAS_TERRAIN = False
     except ImportError as _e:
         _ISAAC_IMPORT_ERROR = str(_e)
+        HAS_TERRAIN = False
 
 if not HAS_ISAAC:
     # Provide stub for development without Isaac Lab
@@ -106,18 +128,76 @@ if HAS_ISAAC:
     class SpotSceneCfg(InteractiveSceneCfg):
         """Scene with Spot robot, ground, and depth cameras."""
 
-        # Ground plane with tuned friction (compensates for PhysX vs MuJoCo gap)
-        ground = AssetBaseCfg(
-            prim_path="/World/ground",
-            spawn=sim_utils.GroundPlaneCfg(
-                size=(20.0, 20.0),
-                physics_material=sim_utils.RigidBodyMaterialCfg(
-                    static_friction=1.2,     # MuJoCo soft contacts → need more friction
-                    dynamic_friction=1.0,
-                    restitution=0.0,         # No bounce (MuJoCo has soft contacts)
+        # ── Terrain (4×4 curriculum grid, 8m patches) ───────────────
+        # Row 0 = flat (easy), Row 3 = rough + stairs (hard).
+        # Robots are promoted/demoted between rows by the curriculum.
+        # Falls back to flat plane if terrain imports are unavailable.
+        if HAS_TERRAIN:
+            terrain = TerrainImporterCfg(
+                prim_path="/World/ground",
+                terrain_type="generator",
+                terrain_generator=TerrainGeneratorCfg(
+                    seed=0,
+                    size=(PATCH_SIZE, PATCH_SIZE),
+                    border_width=0.25,
+                    num_rows=TERRAIN_ROWS,
+                    num_cols=TERRAIN_COLS,
+                    horizontal_scale=0.1,
+                    vertical_scale=0.005,
+                    slope_threshold=0.75,
+                    curriculum=True,
+                    sub_terrains={
+                        # 40 % flat (rows 0-1 priority)
+                        "flat": HfRandomUniformTerrainCfg(
+                            proportion=0.4,
+                            noise_range=(0.0, 0.01),
+                            noise_step=0.01,
+                        ),
+                        # 20 % rough
+                        "rough": HfRandomUniformTerrainCfg(
+                            proportion=0.2,
+                            noise_range=(0.02, 0.10),
+                            noise_step=0.02,
+                        ),
+                        # 20 % stairs up
+                        "stairs_up": HfPyramidStairsTerrainCfg(
+                            proportion=0.2,
+                            step_height_range=(0.05, 0.23),
+                            step_width=0.30,
+                            platform_width=3.0,
+                        ),
+                        # 20 % stairs down
+                        "stairs_down": HfInvertedPyramidStairsTerrainCfg(
+                            proportion=0.2,
+                            step_height_range=(0.05, 0.23),
+                            step_width=0.30,
+                            platform_width=3.0,
+                        ),
+                    },
                 ),
-            ),
-        )
+                collision_group=-1,
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    friction_combine_mode="multiply",
+                    restitution_combine_mode="multiply",
+                    static_friction=1.0,
+                    dynamic_friction=1.0,
+                    restitution=0.0,
+                ),
+                debug_vis=False,
+            )
+        else:
+            # Flat-plane fallback (no terrain package)
+            ground = AssetBaseCfg(
+                prim_path="/World/ground",
+                spawn=sim_utils.GroundPlaneCfg(
+                    size=(200.0, 200.0),
+                    physics_material=sim_utils.RigidBodyMaterialCfg(
+                        static_friction=1.0,
+                        dynamic_friction=1.0,
+                        restitution=0.0,
+                    ),
+                ),
+            )
 
         # Spot robot (imported from MJCF -> USD)
         # The MJCF importer converts spot_scene.xml + OBJ meshes to USD.
@@ -220,51 +300,10 @@ if HAS_ISAAC:
             ),
         )
 
-        # ── Walls (4 axis-aligned boxes enclosing 10x10m room) ────────
-        wall_north = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/wall_north",
-            spawn=sim_utils.CuboidCfg(
-                size=(10.0, 0.2, 3.0),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
-            ),
-            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 5.0, 1.5)),
-        )
-        wall_south = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/wall_south",
-            spawn=sim_utils.CuboidCfg(
-                size=(10.0, 0.2, 3.0),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
-            ),
-            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, -5.0, 1.5)),
-        )
-        wall_east = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/wall_east",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.2, 10.0, 3.0),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
-            ),
-            init_state=AssetBaseCfg.InitialStateCfg(pos=(5.0, 0.0, 1.5)),
-        )
-        wall_west = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/wall_west",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.2, 10.0, 3.0),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.6, 0.6)),
-            ),
-            init_state=AssetBaseCfg.InitialStateCfg(pos=(-5.0, 0.0, 1.5)),
-        )
-        # ── Obstacle rigid bodies (25 static boxes + 5 dynamic + 1 humanoid) ──
-        # Each is a kinematic rigid body (position-controlled, not simulated).
-        # Positions are set from SpotNavEnv._obs_pos each step.
-        # Spawned at off-scene (100, 0, 0.5) — moved into room on reset.
+        # ── Obstacle rigid bodies (2 static boxes + 1 humanoid slot) ──
+        # Kinematic bodies — positions written each reset from SpotNavEnv._obs_pos.
+        # Only placed on flat terrain patches (row ≤ FLAT_TERRAIN_ROW_MAX).
+        # Spawned far off-scene initially; moved on reset for flat-terrain envs.
     # Build obstacle configs programmatically from OBS_HALF_SIZES
     def _build_obstacle_cfgs():
         """Generate RigidObjectCfg for each obstacle."""
@@ -353,7 +392,7 @@ if HAS_ISAAC:
         # Scene
         scene: InteractiveSceneCfg = SpotSceneCfg(
             num_envs=4096,
-            env_spacing=5.0,                # 5m between env origins
+            env_spacing=PATCH_SIZE,         # 8m matches terrain patch size
         )
 
         # Spaces (renamed from num_observations/num_actions in Isaac Lab 0.54)

@@ -59,8 +59,14 @@ JOINT_UPPER = [
 ]
 STANDING_POSE = [0.0, 1.04, -1.8] * 4  # home keyframe (12 joints)
 
-# ── Room ─────────────────────────────────────────────────────────────────────
-ROOM_HALF = 4.5   # 10x10 m room, keep 0.5m buffer from walls
+# ── Terrain / room ───────────────────────────────────────────────────────────
+PATCH_SIZE = 8.0     # each terrain patch is 8 × 8 m
+PATCH_HALF = 3.5     # usable half-width inside patch (0.5 m border)
+ROOM_HALF  = PATCH_HALF  # backward-compat alias (mock env, reward clamps)
+
+TERRAIN_ROWS = 4     # 4 difficulty rows (row 0 = easiest)
+TERRAIN_COLS = 4     # 4 columns per row  → 16 patch templates
+FLAT_TERRAIN_ROW_MAX = 1  # rows 0 & 1 are flat → place obstacles there
 
 # ── Camera ───────────────────────────────────────────────────────────────────
 N_CAMS   = 5
@@ -72,36 +78,27 @@ MIN_DEPTH = 0.1
 MAX_DEPTH = 10.0
 
 # ── Obstacles ────────────────────────────────────────────────────────────────
-N_STATIC   = 25
-N_DYNAMIC  = 5
-N_HUMANOID = 1
-N_OBS      = N_STATIC + N_DYNAMIC + N_HUMANOID  # 31
-HUMANOID_MOCAP_IDX = N_STATIC + N_DYNAMIC       # = 30 (last entry)
+# Reduced to 2 static boxes on flat-terrain patches only.
+# Humanoid entry kept in the array (index 2) but disabled; its slot keeps
+# HUMANOID_MOCAP_IDX valid so existing array indexing doesn't break.
+N_STATIC   = 2
+N_DYNAMIC  = 0
+N_HUMANOID = 1           # slot kept, always off-scene
+N_OBS      = N_STATIC + N_DYNAMIC + N_HUMANOID  # 3
+HUMANOID_MOCAP_IDX = N_STATIC + N_DYNAMIC        # = 2
 
-# Obstacle half-sizes (x, y, z) — ported from warp_cameras.py _OBS_HALF_SIZES
-# 25 static boxes + 5 dynamic cylinders (approx as boxes) + 1 humanoid AABB
 OBS_HALF_SIZES = [
-    # 25 static boxes (varied sizes)
-    [0.30, 0.30, 0.50], [0.25, 0.40, 0.40], [0.20, 0.20, 0.80], [0.40, 0.20, 0.45],
-    [0.35, 0.35, 0.35], [0.30, 0.30, 0.50], [0.50, 0.20, 0.60], [0.20, 0.50, 0.40],
-    [0.40, 0.40, 0.30], [0.30, 0.25, 0.70], [0.20, 0.30, 0.50], [0.35, 0.35, 0.40],
-    [0.45, 0.20, 0.45], [0.30, 0.40, 0.30], [0.25, 0.25, 0.60], [0.30, 0.30, 0.50],
-    [0.40, 0.30, 0.35], [0.20, 0.40, 0.55], [0.35, 0.20, 0.40], [0.30, 0.30, 0.50],
-    [0.40, 0.40, 0.40], [0.25, 0.35, 0.45], [0.30, 0.25, 0.50], [0.45, 0.30, 0.35],
-    [0.20, 0.20, 0.70],
-    # 5 dynamic cylinders (approximated as boxes)
-    [0.25, 0.25, 0.85], [0.25, 0.25, 0.85], [0.25, 0.25, 0.85],
-    [0.25, 0.25, 0.85], [0.25, 0.25, 0.85],
-    # 1 humanoid AABB (centred at torso, z=1.0, covers 0-2m height)
-    [0.30, 0.30, 1.00],
+    [0.30, 0.30, 0.50],  # static box 0
+    [0.25, 0.40, 0.40],  # static box 1
+    [0.30, 0.30, 1.00],  # humanoid AABB (always off-scene)
 ]
 
 # ── Humanoid walking obstacle ────────────────────────────────────────────────
 HUMANOID_OBSTACLE = {
-    "enabled":        True,
-    "speed":          0.8,     # m/s walking speed
-    "stride_freq":    1.2,     # Hz
-    "patrol_radius":  1.5,     # metres from goal centre to each waypoint
-    "mocap_z":        1.0,     # world-frame z of the torso
-    "wp_switch_dist": 0.2,     # switch waypoint when closer than this (m)
+    "enabled":        False,   # disabled — terrain curriculum uses no humanoid
+    "speed":          0.8,
+    "stride_freq":    1.2,
+    "patrol_radius":  1.5,
+    "mocap_z":        1.0,
+    "wp_switch_dist": 0.2,
 }
