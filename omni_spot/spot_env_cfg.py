@@ -204,7 +204,7 @@ if HAS_ISAAC:
 
         # ── Walls (4 axis-aligned boxes enclosing 10x10m room) ────────
         wall_north = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/Walls/north",
+            prim_path="{ENV_REGEX_NS}/wall_north",
             spawn=sim_utils.CuboidCfg(
                 size=(10.0, 0.2, 3.0),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -214,7 +214,7 @@ if HAS_ISAAC:
             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 5.0, 1.5)),
         )
         wall_south = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/Walls/south",
+            prim_path="{ENV_REGEX_NS}/wall_south",
             spawn=sim_utils.CuboidCfg(
                 size=(10.0, 0.2, 3.0),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -224,7 +224,7 @@ if HAS_ISAAC:
             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, -5.0, 1.5)),
         )
         wall_east = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/Walls/east",
+            prim_path="{ENV_REGEX_NS}/wall_east",
             spawn=sim_utils.CuboidCfg(
                 size=(0.2, 10.0, 3.0),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -234,7 +234,7 @@ if HAS_ISAAC:
             init_state=AssetBaseCfg.InitialStateCfg(pos=(5.0, 0.0, 1.5)),
         )
         wall_west = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/Walls/west",
+            prim_path="{ENV_REGEX_NS}/wall_west",
             spawn=sim_utils.CuboidCfg(
                 size=(0.2, 10.0, 3.0),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -254,7 +254,7 @@ if HAS_ISAAC:
         for i in range(N_STATIC):
             hs = OBS_HALF_SIZES[i]
             cfgs[f"obs_static_{i:02d}"] = RigidObjectCfg(
-                prim_path="{ENV_REGEX_NS}/Obstacles/" + f"static_{i:02d}",
+                prim_path=f"{{ENV_REGEX_NS}}/obs_static_{i:02d}",
                 spawn=sim_utils.CuboidCfg(
                     size=(hs[0] * 2, hs[1] * 2, hs[2] * 2),
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -273,7 +273,7 @@ if HAS_ISAAC:
             idx = N_STATIC + i
             hs = OBS_HALF_SIZES[idx]
             cfgs[f"obs_dynamic_{i:02d}"] = RigidObjectCfg(
-                prim_path="{ENV_REGEX_NS}/Obstacles/" + f"dynamic_{i:02d}",
+                prim_path=f"{{ENV_REGEX_NS}}/obs_dynamic_{i:02d}",
                 spawn=sim_utils.CylinderCfg(
                     radius=hs[0],
                     height=hs[2] * 2,
@@ -292,7 +292,7 @@ if HAS_ISAAC:
         # Humanoid (approximated as a tall capsule/box)
         hs = OBS_HALF_SIZES[N_STATIC + N_DYNAMIC]
         cfgs["obs_humanoid"] = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Obstacles/humanoid",
+            prim_path="{ENV_REGEX_NS}/obs_humanoid",
             spawn=sim_utils.CapsuleCfg(
                 radius=hs[0],
                 height=hs[2] * 2 - hs[0] * 2,  # capsule height excludes end caps
@@ -318,7 +318,7 @@ if HAS_ISAAC:
         prim_path="{ENV_REGEX_NS}/Robot/.*",
         update_period=0.0,   # every physics step
         history_length=1,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/Obstacles/.*"],
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/obs_.*"],
     )
     # ════════════════════════════════════════════════════════════════════════
     # ENVIRONMENT CONFIG
