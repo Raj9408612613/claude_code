@@ -13,7 +13,7 @@ python3 cpu_monitor.py
 python3 combined_monitor.py
 
 
-#**Running isaac lab on a EC2 instance**
+#*Running isaac lab on a EC2 instance*
 git clone
 run setup_ec2_isaac.sh
 run verify_setup.sh
