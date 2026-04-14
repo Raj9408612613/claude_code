@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/isaac-sim:4.5.0
+FROM nvcr.io/nvidia/isaac-sim:5.1.0
 
 # ── Install git (not included in Isaac Sim base image) ───────────────────────
 RUN apt-get update -qq && apt-get install -y --no-install-recommends git && \
