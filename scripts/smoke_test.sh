@@ -109,6 +109,8 @@ else
         -v "$HOME/.isaac_cache/computecache:/root/.nv/ComputeCache" \
         "$CUSTOM_IMAGE" \
         /isaac-sim/python.sh -m omni_spot.train \
+            --headless \
+            --enable_cameras \
             --num_envs $NUM_ENVS \
             --n_steps $N_STEPS \
             --total_updates $UPDATES \
