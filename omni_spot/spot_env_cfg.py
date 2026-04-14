@@ -229,12 +229,68 @@ if HAS_ISAAC:
             },
         )
 
-        # ── Depth cameras — DISABLED (usdrt.hierarchy API removed in Isaac Sim 4.5) ──
-        # Isaac Lab 0.54's camera.py calls usdrt.hierarchy.IFabricHierarchy() which
-        # no longer exists in Isaac Sim 4.5.0. Cameras crash on scene.reset().
-        # _get_observations() returns zero tensors for depth in the meantime.
-        # Re-enable when Isaac Lab is updated to support Isaac Sim 4.5 usdrt API.
-        # cam_front_center = CameraCfg(prim_path="...", ...)
+        # ── Depth cameras (5 cameras on Spot body) ──────────────────
+        # Each camera matches: 120x160 pixels, 87 deg HFOV, depth only
+        cam_front_center = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_center",
+            update_period=CONTROL_DT,
+            height=CAM_H,
+            width=CAM_W,
+            data_types=["distance_to_camera"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=1.0,
+                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
+                clipping_range=(MIN_DEPTH, MAX_DEPTH),
+            ),
+        )
+        cam_front_left = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_left",
+            update_period=CONTROL_DT,
+            height=CAM_H,
+            width=CAM_W,
+            data_types=["distance_to_camera"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=1.0,
+                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
+                clipping_range=(MIN_DEPTH, MAX_DEPTH),
+            ),
+        )
+        cam_front_right = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_right",
+            update_period=CONTROL_DT,
+            height=CAM_H,
+            width=CAM_W,
+            data_types=["distance_to_camera"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=1.0,
+                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
+                clipping_range=(MIN_DEPTH, MAX_DEPTH),
+            ),
+        )
+        cam_rear_left = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_left",
+            update_period=CONTROL_DT,
+            height=CAM_H,
+            width=CAM_W,
+            data_types=["distance_to_camera"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=1.0,
+                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
+                clipping_range=(MIN_DEPTH, MAX_DEPTH),
+            ),
+        )
+        cam_rear_right = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_right",
+            update_period=CONTROL_DT,
+            height=CAM_H,
+            width=CAM_W,
+            data_types=["distance_to_camera"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=1.0,
+                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
+                clipping_range=(MIN_DEPTH, MAX_DEPTH),
+            ),
+        )
 
         # ── Obstacle rigid bodies (2 static boxes + 1 humanoid slot) ──
         # Kinematic bodies — positions written each reset from SpotNavEnv._obs_pos.
