@@ -227,21 +227,13 @@ if HAS_ISAAC:
             """Build observation dict with depth + proprio."""
             robot = self.scene["robot"]
 
-            # ── Depth from RTX cameras ───────────────────────────────
-            cam_names = [
-                "cam_front_center", "cam_front_left", "cam_front_right",
-                "cam_rear_left", "cam_rear_right",
-            ]
-            depth_list = []
-            for name in cam_names:
-                cam = self.scene[name]
-                # distance_to_camera: (num_envs, H, W, 1) -> (num_envs, 1, H, W)
-                d = cam.data.output["distance_to_camera"]
-                d = d.permute(0, 3, 1, 2)  # channels first
-                d = torch.clamp(d, MIN_DEPTH, MAX_DEPTH)
-                depth_list.append(d)
-
-            depth = torch.cat(depth_list, dim=1)  # (num_envs, 5, H, W)
+            # ── Depth: zero tensor (cameras disabled — usdrt.hierarchy API broken) ──
+            # CameraCfg removed from SpotSceneCfg due to usdrt.hierarchy removal
+            # in Isaac Sim 4.5.0. Return zeros so CNN receives valid-shaped input.
+            depth = torch.zeros(
+                self.num_envs, N_CAMS, CAM_H, CAM_W,
+                device=self.device, dtype=torch.float32,
+            )
 
             # ── Proprioception (37-dim) ──────────────────────────────
             root_pos  = robot.data.root_pos_w           # (B, 3)
