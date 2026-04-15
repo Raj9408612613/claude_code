@@ -111,6 +111,11 @@ if HAS_ISAAC:
                 [hs[2] for hs in OBS_HALF_SIZES], device=self.device
             )
 
+            # Cached joint targets (set in _pre_physics_step, applied in _apply_action)
+            self._ctrl = torch.zeros(
+                self.num_envs, ACTION_DIM, device=self.device
+            )
+
         # ── Reset ────────────────────────────────────────────────────
         def _reset_idx(self, env_ids: torch.Tensor):
             """Reset selected environments."""
@@ -279,15 +284,18 @@ if HAS_ISAAC:
 
         # ── Actions ──────────────────────────────────────────────────
         def _pre_physics_step(self, actions: torch.Tensor):
-            """Convert normalized [-1,1] actions to joint targets."""
+            """Convert normalized [-1,1] actions to joint targets (called once per control step)."""
             actions = torch.clamp(actions, -1.0, 1.0)
             actions = torch.where(
                 torch.isfinite(actions), actions, torch.zeros_like(actions)
             )
-            # Denormalize to joint position targets
-            ctrl = self._joint_mid + actions * self._joint_range
-            self.scene["robot"].set_joint_position_target(ctrl)
-            self._prev_action = ctrl
+            # Denormalize to joint position targets; cache for _apply_action
+            self._ctrl = self._joint_mid + actions * self._joint_range
+            self._prev_action = self._ctrl
+
+        def _apply_action(self):
+            """Write cached joint targets to the simulation (called each physics substep)."""
+            self.scene["robot"].set_joint_position_target(self._ctrl)
 
         # ── Rewards ──────────────────────────────────────────────────
         def _get_rewards(self) -> torch.Tensor:
