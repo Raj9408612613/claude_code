@@ -99,6 +99,7 @@ else
 
     sudo docker run --rm --gpus all \
         --entrypoint="" \
+        --stop-timeout 30 \
         -e "ACCEPT_EULA=Y" \
         -e "PYTHONUNBUFFERED=1" \
         -v "$REPO_DIR":/workspace \
@@ -121,7 +122,7 @@ else
     if [ -f "$REPO_DIR/smoke_test_output/SUCCESS" ]; then
         echo ""
         echo "  [PASS] Level 2: Isaac Lab smoke test passed (via Docker container)"
-        rm -f "$REPO_DIR/smoke_test_output/SUCCESS"
+        sudo rm -f "$REPO_DIR/smoke_test_output/SUCCESS"
     else
         echo ""
         echo "  [FAIL] Level 2: Isaac Lab smoke test failed (docker exit=$DOCKER_EXIT, no SUCCESS marker)"
