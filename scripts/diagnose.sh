@@ -35,9 +35,9 @@ sudo lsof 2>/dev/null | awk '$4 ~ /[0-9]+w/ {print $1, $2, $9}' | sort -u | head
 
 # --- Smoke test log tail ---
 echo ""
-echo "--- Last 30 lines of smoke_test.log ---"
+echo "--- Last 10 lines of smoke_test.log ---"
 if [ -f ~/smoke_test.log ]; then
-    tail -30 ~/smoke_test.log
+    tail -10 ~/smoke_test.log
 else
     echo "  ~/smoke_test.log not found"
 fi
