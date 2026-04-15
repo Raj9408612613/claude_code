@@ -332,6 +332,13 @@ if HAS_ISAAC:
                 prev_dist_goal = self._prev_dist,
             )
 
+            # Forward reward components to self.extras so ppo.py can read them
+            # from the step_info dict (Isaac Lab returns self.extras as the 5th
+            # element of step(), not a _get_info() callback)
+            for k, v in self._reward_info.items():
+                if isinstance(v, torch.Tensor):
+                    self.extras[k] = v
+
             self._prev_dist = new_dist
             self._step_count += 1
             return reward
