@@ -1,5 +1,8 @@
 FROM nvcr.io/nvidia/isaac-sim:5.1.0
 
+# isaac-sim:5.1.0 drops to a non-root user; switch back for apt
+USER root
+
 # ── Install git (not included in Isaac Sim base image) ───────────────────────
 RUN apt-get update -qq && apt-get install -y --no-install-recommends git && \
     rm -rf /var/lib/apt/lists/*
