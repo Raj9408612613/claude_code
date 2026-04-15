@@ -336,6 +336,11 @@ if HAS_ISAAC:
             self._step_count += 1
             return reward
 
+        # ── Info (reward components for diagnostics) ─────────────────
+        def _get_info(self) -> dict:
+            """Forward per-step reward components to the step info dict."""
+            return getattr(self, '_reward_info', {})
+
         # ── Termination ──────────────────────────────────────────────
         def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
             robot = self.scene["robot"]
