@@ -100,10 +100,11 @@ class SpotActorCritic(nn.Module):
         self.actor = nn.Linear(128, ACTION_DIM)
 
         # Learnable log_std (not per-observation, shared across batch)
-        # Init std = e^-2 ≈ 0.14 rad × joint_range → ~110 Nm max torque.
-        # std=1.0 (zeros init) produced ~800 Nm on the first random step,
-        # instantly knocking the robot over before any learning could happen.
-        self.log_std = nn.Parameter(torch.full((ACTION_DIM,), -2.0))
+        # Init std = e^-1 ≈ 0.37. Balances exploration vs stability:
+        # -2.0 (std=0.14) was too conservative — near-zero entropy (-6.9)
+        # killed exploration. -1.0 gives entropy ≈ +5, still 3× less
+        # chaotic than the original std=1.0 that threw the robot over.
+        self.log_std = nn.Parameter(torch.full((ACTION_DIM,), -1.0))
 
         # Critic head
         self.critic0 = nn.Linear(128, 64)

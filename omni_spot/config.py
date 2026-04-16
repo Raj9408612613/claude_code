@@ -10,10 +10,10 @@ GAMMA        = 0.99
 GAE_LAMBDA   = 0.95
 CLIP_EPS     = 0.2
 ENT_COEF     = 0.01
-VF_COEF      = 0.5
-MAX_GRAD     = 0.5
+VF_COEF      = 1.0
+MAX_GRAD     = 1.5
 LR           = 3e-4
-N_EPOCHS     = 4
+N_EPOCHS     = 8
 MINIBATCH_SZ = 512
 TARGET_KL    = 0.03
 
