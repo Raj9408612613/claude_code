@@ -41,6 +41,10 @@ try:
     from isaaclab.envs import DirectRLEnvCfg
     from isaaclab.scene import InteractiveSceneCfg
     from isaaclab.sensors import CameraCfg
+    try:
+        from isaaclab.sensors import TiledCameraCfg as _ActiveCameraClass
+    except ImportError:
+        _ActiveCameraClass = CameraCfg
     from isaaclab.sim import SimulationCfg, PhysxCfg
     from isaaclab.utils import configclass
     # Terrain imports — all re-exported from isaaclab.terrains top-level
@@ -64,6 +68,10 @@ except ImportError:
         from omni.isaac.lab.envs import DirectRLEnvCfg
         from omni.isaac.lab.scene import InteractiveSceneCfg
         from omni.isaac.lab.sensors import CameraCfg
+        try:
+            from omni.isaac.lab.sensors import TiledCameraCfg as _ActiveCameraClass
+        except ImportError:
+            _ActiveCameraClass = CameraCfg
         from omni.isaac.lab.sim import SimulationCfg, PhysxCfg
         from omni.isaac.lab.utils import configclass
         HAS_ISAAC = True
@@ -230,7 +238,7 @@ if HAS_ISAAC:
 
         # ── Depth cameras (5 cameras on Spot body) ──────────────────
         # Each camera matches: 120x160 pixels, 87 deg HFOV, depth only
-        cam_front_center = CameraCfg(
+        cam_front_center = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_center",
             update_period=CONTROL_DT,
             height=CAM_H,
@@ -242,7 +250,7 @@ if HAS_ISAAC:
                 clipping_range=(MIN_DEPTH, MAX_DEPTH),
             ),
         )
-        cam_front_left = CameraCfg(
+        cam_front_left = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_left",
             update_period=CONTROL_DT,
             height=CAM_H,
@@ -254,7 +262,7 @@ if HAS_ISAAC:
                 clipping_range=(MIN_DEPTH, MAX_DEPTH),
             ),
         )
-        cam_front_right = CameraCfg(
+        cam_front_right = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_right",
             update_period=CONTROL_DT,
             height=CAM_H,
@@ -266,7 +274,7 @@ if HAS_ISAAC:
                 clipping_range=(MIN_DEPTH, MAX_DEPTH),
             ),
         )
-        cam_rear_left = CameraCfg(
+        cam_rear_left = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_left",
             update_period=CONTROL_DT,
             height=CAM_H,
@@ -278,7 +286,7 @@ if HAS_ISAAC:
                 clipping_range=(MIN_DEPTH, MAX_DEPTH),
             ),
         )
-        cam_rear_right = CameraCfg(
+        cam_rear_right = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_right",
             update_period=CONTROL_DT,
             height=CAM_H,
