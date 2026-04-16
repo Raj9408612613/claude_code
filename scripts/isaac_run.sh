@@ -48,6 +48,7 @@ if [ $# -eq 0 ]; then
     echo "  Project mounted at /workspace"
     sudo docker run --rm -it --gpus all \
         --entrypoint="" \
+        --shm-size=32g \
         -e "ACCEPT_EULA=Y" \
         -v "$REPO_DIR":/workspace \
         -v "$HOME/omni_logs":/workspace/omni_logs \
@@ -62,6 +63,7 @@ else
         shift
         sudo docker run --rm --gpus all \
             --entrypoint="" \
+            --shm-size=32g \
             -e "ACCEPT_EULA=Y" \
             -e "PYTHONUNBUFFERED=1" \
             -v "$REPO_DIR":/workspace \
@@ -72,6 +74,7 @@ else
     else
         sudo docker run --rm --gpus all \
             --entrypoint="" \
+            --shm-size=32g \
             -e "ACCEPT_EULA=Y" \
             -e "PYTHONUNBUFFERED=1" \
             -v "$REPO_DIR":/workspace \

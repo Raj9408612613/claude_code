@@ -90,11 +90,6 @@ if HAS_ISAAC:
         dt = PHYSICS_DT                    # 0.005s = 200 Hz
         render_interval = PHYSICS_SUBSTEPS  # render every 4 physics steps
         gravity = (0.0, 0.0, -9.81)
-        # Disable USD Fabric backend — usdrt.hierarchy is not available in
-        # Isaac Sim 4.5.0 (it requires 5.1.0). Falls back to plain USD pose
-        # queries for cameras. Remove this once base image is upgraded to 5.1.0.
-        use_fabric: bool = False
-
         physx: PhysxCfg = PhysxCfg(
             # GPU solver is the default in Isaac Lab 0.54+
             solver_type=1,                 # TGS solver (better for articulations)
