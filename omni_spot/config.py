@@ -39,24 +39,40 @@ SMOOTH_W         =  -0.002
 ALIVE_BONUS      =    0.5
 HEADING_W        =    0.3
 
+# ── Robot physical properties (real Boston Dynamics Spot) ────────────────────
+SPOT_MASS         = 32.7                    # kg (BD datasheet)
+SPOT_BODY_DIMS    = [1.1, 0.5, 0.191]      # L×W×H in metres (1100×500×191 mm)
+
 # ── Physics ──────────────────────────────────────────────────────────────────
 PHYSICS_DT        = 0.005    # PhysX sim timestep (200 Hz)
 CONTROL_DT        = 0.02     # RL control rate (50 Hz) = 4 substeps
 PHYSICS_SUBSTEPS  = 4
 
-# ── Joint limits (real Spot SDK values from MuJoCo Menagerie) ────────────────
+# ── Joint limits (real Spot URDF values) ─────────────────────────────────────
+#   hip_x (abduction):  ±0.785398 rad
+#   hip_y (flexion):    -0.89012 / +2.29511 rad
+#   knee:               per-leg upper from URDF (all close to -0.254)
 JOINT_LOWER = [
-    -0.785398, -0.898845, -2.7929,   # fl: hx, hy, kn
-    -0.785398, -0.898845, -2.7929,   # fr
-    -0.785398, -0.898845, -2.7929,   # hl
-    -0.785398, -0.898845, -2.7929,   # hr
+    -0.785398, -0.89012, -2.7929,   # fl: hx, hy, kn
+    -0.785398, -0.89012, -2.7929,   # fr
+    -0.785398, -0.89012, -2.7929,   # hl
+    -0.785398, -0.89012, -2.7929,   # hr
 ]
 JOINT_UPPER = [
      0.785398,  2.29511,  -0.254402, # fl
-     0.785398,  2.24363,  -0.255648, # fr
+     0.785398,  2.29511,  -0.255648, # fr  (was 2.24363 — corrected to match URDF)
      0.785398,  2.29511,  -0.247067, # hl
      0.785398,  2.29511,  -0.248282, # hr
 ]
+
+# ── Joint velocity limits (rad/s) ─────────────────────────────────────────────
+JOINT_VEL_LIMITS = [
+    4.0, 4.0, 6.0,   # fl: hx, hy, kn  (hip: 4 rad/s, knee: 6 rad/s)
+    4.0, 4.0, 6.0,   # fr
+    4.0, 4.0, 6.0,   # hl
+    4.0, 4.0, 6.0,   # hr
+]
+
 STANDING_POSE = [0.0, 1.04, -1.8] * 4  # home keyframe (12 joints)
 
 # ── Terrain / room ───────────────────────────────────────────────────────────
