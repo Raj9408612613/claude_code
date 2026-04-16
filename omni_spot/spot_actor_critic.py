@@ -4,7 +4,7 @@ Spot Actor-Critic Network — PyTorch
 Ported from jax_ppo.py (Flax/JAX).
 
 Architecture (identical to JAX version):
-    Depth (5x120x160) -> CNN encoder -> 256-dim
+    Depth (3x120x160) -> CNN encoder -> 256-dim
     Proprio (37)       -> MLP encoder -> 64-dim
                               | concat (320-dim)
                           MLP (256 -> 128)
@@ -25,7 +25,7 @@ from .config import (
 
 
 class DepthCNNEncoder(nn.Module):
-    """5x120x160 depth images -> CNN_FEAT_DIM features.
+    """Nx120x160 depth images -> CNN_FEAT_DIM features (N = N_CAMS = 3).
 
     Matches Flax version exactly:
         Conv(32, 8x8, stride=4) -> ELU
@@ -36,8 +36,8 @@ class DepthCNNEncoder(nn.Module):
 
     def __init__(self, features: int = CNN_FEAT_DIM):
         super().__init__()
-        # Input channels = 5 (depth cameras stacked as channels)
-        self.conv1 = nn.Conv2d(5, 32, kernel_size=8, stride=4)
+        from .config import N_CAMS
+        self.conv1 = nn.Conv2d(N_CAMS, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         # Compute flattened size: input (5, 120, 160)
@@ -49,7 +49,7 @@ class DepthCNNEncoder(nn.Module):
     def forward(self, depth: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            depth: (B, 5, 120, 160) — already channels-first for PyTorch
+            depth: (B, N_CAMS, 120, 160) — already channels-first for PyTorch
         Returns:
             (B, CNN_FEAT_DIM) features
         """
@@ -115,7 +115,7 @@ class SpotActorCritic(nn.Module):
         """Full forward pass.
 
         Args:
-            depth:  (B, 5, 120, 160)
+            depth:  (B, N_CAMS, 120, 160)
             proprio: (B, 37)
 
         Returns:
@@ -130,7 +130,7 @@ class SpotActorCritic(nn.Module):
         """Run only the CNN encoder (for feature caching during rollout).
 
         Args:
-            depth: (B, 5, 120, 160)
+            depth: (B, N_CAMS, 120, 160)
         Returns:
             (B, CNN_FEAT_DIM) features
         """

@@ -85,7 +85,7 @@ TERRAIN_COLS = 4     # 4 columns per row  → 16 patch templates
 FLAT_TERRAIN_ROW_MAX = 1  # rows 0 & 1 are flat → place obstacles there
 
 # ── Camera ───────────────────────────────────────────────────────────────────
-N_CAMS   = 5
+N_CAMS   = 3
 CAM_H    = 120
 CAM_W    = 160
 H_FOV    = 87.0    # degrees

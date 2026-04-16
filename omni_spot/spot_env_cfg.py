@@ -236,8 +236,10 @@ if HAS_ISAAC:
             },
         )
 
-        # ── Depth cameras (5 cameras on Spot body) ──────────────────
-        # Each camera matches: 120x160 pixels, 87 deg HFOV, depth only
+        # ── Depth cameras (3 front-facing cameras on Spot body) ─────
+        # Covers 180° forward arc. Rear cameras removed to reduce
+        # RTX view count (128 envs × 3 = 384 vs 640 with 5 cameras).
+        # Each camera: 120x160 pixels, 87 deg HFOV, depth only.
         cam_front_center = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_center",
             update_period=CONTROL_DT,
@@ -264,30 +266,6 @@ if HAS_ISAAC:
         )
         cam_front_right = _ActiveCameraClass(
             prim_path="{ENV_REGEX_NS}/Robot/body/cam_front_right",
-            update_period=CONTROL_DT,
-            height=CAM_H,
-            width=CAM_W,
-            data_types=["distance_to_camera"],
-            spawn=sim_utils.PinholeCameraCfg(
-                focal_length=1.0,
-                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
-                clipping_range=(MIN_DEPTH, MAX_DEPTH),
-            ),
-        )
-        cam_rear_left = _ActiveCameraClass(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_left",
-            update_period=CONTROL_DT,
-            height=CAM_H,
-            width=CAM_W,
-            data_types=["distance_to_camera"],
-            spawn=sim_utils.PinholeCameraCfg(
-                focal_length=1.0,
-                horizontal_aperture=2.0 * math.tan(math.radians(H_FOV / 2)),
-                clipping_range=(MIN_DEPTH, MAX_DEPTH),
-            ),
-        )
-        cam_rear_right = _ActiveCameraClass(
-            prim_path="{ENV_REGEX_NS}/Robot/body/cam_rear_right",
             update_period=CONTROL_DT,
             height=CAM_H,
             width=CAM_W,

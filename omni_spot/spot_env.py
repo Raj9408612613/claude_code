@@ -235,7 +235,6 @@ if HAS_ISAAC:
             # ── Depth from RTX cameras ───────────────────────────────
             cam_names = [
                 "cam_front_center", "cam_front_left", "cam_front_right",
-                "cam_rear_left", "cam_rear_right",
             ]
             depth_list = []
             for name in cam_names:
