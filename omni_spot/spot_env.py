@@ -69,6 +69,13 @@ if HAS_ISAAC:
             )
             self._joint_mid   = (self._joint_upper + self._joint_lower) / 2.0
             self._joint_range = (self._joint_upper - self._joint_lower) / 2.0
+            # Action centre: standing pose so action=0 → robot stands still.
+            # Using joint_mid as centre meant action=0 produced a non-standing
+            # configuration, and random actions (std=1) applied ~800 Nm torques
+            # on the first step, immediately knocking the robot over.
+            self._action_center = torch.tensor(
+                STANDING_POSE, device=self.device, dtype=torch.float32
+            )
 
             # Goal positions (randomized per env on reset)
             self._goal_pos = torch.zeros(
@@ -289,7 +296,7 @@ if HAS_ISAAC:
                 torch.isfinite(actions), actions, torch.zeros_like(actions)
             )
             # Denormalize to joint position targets; cache for _apply_action
-            self._ctrl = self._joint_mid + actions * self._joint_range
+            self._ctrl = self._action_center + actions * self._joint_range
             self._prev_action = self._ctrl
 
         def _apply_action(self):

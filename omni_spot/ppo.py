@@ -305,13 +305,12 @@ class PPOTrainer:
         pg_loss2    = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
         policy_loss = -torch.mean(torch.minimum(pg_loss1, pg_loss2))
 
-        # ── Value loss with PPO clipping ─────────────────────────────
-        value_clipped = batch.old_value + torch.clamp(
-            value - batch.old_value, -CLIP_EPS, CLIP_EPS
-        )
-        vf_loss1   = (value         - batch.ret) ** 2
-        vf_loss2   = (value_clipped - batch.ret) ** 2
-        value_loss = 0.5 * torch.mean(torch.maximum(vf_loss1, vf_loss2))
+        # ── Value loss (simple MSE, no PPO clipping) ─────────────────
+        # PPO-style VF clipping was removed: batch.old_value is stored in
+        # normalised scale while value is raw network output, so the clip
+        # bound (-CLIP_EPS, +CLIP_EPS) was always saturated → zero gradient
+        # on vf_loss2 → asymmetric updates → critic converged to wrong value.
+        value_loss = 0.5 * torch.mean((value - batch.ret) ** 2)
         value_loss = torch.clamp(value_loss, 0.0, 1_000_000.0)
 
         # ── Entropy bonus ────────────────────────────────────────────

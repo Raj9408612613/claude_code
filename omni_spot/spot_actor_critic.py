@@ -100,7 +100,10 @@ class SpotActorCritic(nn.Module):
         self.actor = nn.Linear(128, ACTION_DIM)
 
         # Learnable log_std (not per-observation, shared across batch)
-        self.log_std = nn.Parameter(torch.zeros(ACTION_DIM))
+        # Init std = e^-2 ≈ 0.14 rad × joint_range → ~110 Nm max torque.
+        # std=1.0 (zeros init) produced ~800 Nm on the first random step,
+        # instantly knocking the robot over before any learning could happen.
+        self.log_std = nn.Parameter(torch.full((ACTION_DIM,), -2.0))
 
         # Critic head
         self.critic0 = nn.Linear(128, 64)
