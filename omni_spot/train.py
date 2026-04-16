@@ -20,7 +20,36 @@ import sys
 import time
 import csv
 import json
+import threading
 from datetime import datetime
+
+
+def _heartbeat(stop_event: threading.Event, label: str, interval: int = 30):
+    """Print periodic progress during silent C++/Omniverse init phases."""
+    start = time.time()
+    while not stop_event.wait(interval):
+        elapsed = time.time() - start
+        print(f"  [WAIT] {label} still in progress... ({elapsed:.0f}s elapsed)",
+              flush=True)
+
+
+class _Phase:
+    """Context manager that prints a heartbeat during a slow blocking call."""
+    def __init__(self, label: str, interval: int = 30):
+        self._label = label
+        self._stop  = threading.Event()
+        self._thread = threading.Thread(
+            target=_heartbeat, args=(self._stop, label, interval), daemon=True
+        )
+    def __enter__(self):
+        self._start = time.time()
+        self._thread.start()
+        return self
+    def __exit__(self, *_):
+        self._stop.set()
+        self._thread.join()
+        elapsed = time.time() - self._start
+        print(f"  [DONE] {self._label} completed in {elapsed:.1f}s", flush=True)
 
 # ── Step 1: Launch Isaac Sim BEFORE importing Isaac Lab sub-modules ──
 # This MUST happen before any 'from isaaclab.sim import ...' etc.
@@ -174,7 +203,10 @@ def main():
     env_cfg = SpotNavEnvCfg()
     env_cfg.scene.num_envs = args.num_envs
     apply_tuning(env_cfg.sim, env_cfg.scene)
-    env = SpotNavEnv(cfg=env_cfg)
+
+    print("[INIT] Building scene + RTX cameras (may take 10-30 min)...", flush=True)
+    with _Phase("RTX camera init / scene build"):
+        env = SpotNavEnv(cfg=env_cfg)
 
     print(f"[INIT] Environment created in {time.time()-t0:.1f}s")
     report_gpu_memory("after env creation")
@@ -192,8 +224,9 @@ def main():
         trainer.load(args.resume)
 
     # ── Initial reset ───────────────────────────────────────────────
-    print("[INIT] Resetting environments...")
-    obs, _ = env.reset()
+    print("[INIT] Resetting environments...", flush=True)
+    with _Phase("env.reset()"):
+        obs, _ = env.reset()
     report_gpu_memory("after reset")
     print("[INIT] Reset complete. Starting training.\n")
 
