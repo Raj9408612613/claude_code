@@ -125,9 +125,9 @@ CSV_FIELDS = (
     # Loss components
     "policy_loss", "value_loss", "total_loss",
     # Gradient health
-    "grad_norm",
+    "grad_norm", "skipped_steps",
     # PPO update loop
-    "epochs_run", "early_stop_epoch",
+    "epochs_run", "early_stop_epoch", "running_kl", "lr",
     # Observation health
     "proprio_mean", "proprio_std", "proprio_nan_frac",
     "cnn_feat_mean", "cnn_feat_std", "cnn_feat_nan_frac",
@@ -219,8 +219,11 @@ class SimpleLogger:
             "value_loss":       _fmt(update_info.get("value_loss")),
             "total_loss":       _fmt(update_info.get("total_loss")),
             "grad_norm":        _fmt(update_info.get("grad_norm")),
+            "skipped_steps":    update_info.get("skipped_steps", 0),
             "epochs_run":       update_info.get("epochs_run", ""),
             "early_stop_epoch": update_info.get("early_stop_epoch", ""),
+            "running_kl":       _fmt(update_info.get("running_kl")),
+            "lr":               _fmt(update_info.get("lr"), ".3e"),
             "proprio_mean":     _fmt(diag.get("proprio_mean")),
             "proprio_std":      _fmt(diag.get("proprio_std")),
             "proprio_nan_frac": _fmt(diag.get("proprio_nan_frac")),
@@ -319,9 +322,10 @@ def main():
     # ── Trainer ─────────────────────────────────────────────────────
     print("[INIT] Creating PPO trainer...")
     trainer = PPOTrainer(
-        n_envs  = args.num_envs,
-        n_steps = args.n_steps,
-        lr      = args.lr,
+        n_envs        = args.num_envs,
+        n_steps       = args.n_steps,
+        lr            = args.lr,
+        total_updates = args.total_updates,
     )
 
     if args.resume:
@@ -342,6 +346,9 @@ def main():
 
     for update in range(1, args.total_updates + 1):
         do_profile = args.profile > 0 and update <= args.profile
+
+        # Anneal LR linearly toward 0 over the run BEFORE this update.
+        trainer.anneal_lr(update)
 
         # Collect rollout
         t_roll = time.time()
