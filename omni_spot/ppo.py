@@ -278,8 +278,8 @@ class PPOTrainer:
             "ret_norm_std":      float(returns_norm.std()),
             "ret_norm_min":      float(returns_norm.min()),
             "ret_norm_max":      float(returns_norm.max()),
-            "ret_scale_mean":    float(ret_mean),
-            "ret_scale_std":     float(ret_std),
+            "ret_scale_mean":    float(self._ret_mean),
+            "ret_scale_std":     float(self._ret_std),
             # Report normalized advantages (what PPO actually trains on)
             "adv_mean":          float(adv_norm.mean()),
             "adv_std":           float(adv_norm.std()),
