@@ -98,10 +98,11 @@ class PPOTrainer:
 
     def __init__(
         self,
-        n_envs:  int = 4096,
-        n_steps: int = 2048,
-        lr:      float = LR,
-        device:  str = "cuda",
+        n_envs:        int = 4096,
+        n_steps:       int = 2048,
+        lr:            float = LR,
+        device:        str = "cuda",
+        total_updates: int = 500,
     ):
         self.n_envs  = n_envs
         self.n_steps = n_steps
@@ -120,6 +121,14 @@ class PPOTrainer:
         self._ret_mean = 0.0
         self._ret_std  = 1.0
         self._ret_ema_alpha = 0.05  # ~20-update effective window
+
+        # ── LR annealing ──────────────────────────────────────────────
+        # Linearly decay LR from base → 0 over the run. Smaller updates
+        # late in training keep the trust region tight as the policy nears
+        # a good basin, mirroring rl_games / sb3 default behaviour.
+        self._base_lr       = lr
+        self._total_updates = max(1, total_updates)
+        self._cur_lr        = lr
 
     # ──────────────────────────────────────────────────────────────────
     @torch.no_grad()
@@ -326,7 +335,12 @@ class PPOTrainer:
 
         # ── Policy loss with ratio clamping ──────────────────────────
         log_prob_new = gaussian_log_prob(mean, log_std, batch.action)
-        log_ratio = torch.clamp(log_prob_new - batch.log_prob, -10.0, 10.0)
+        # Tight log-ratio clamp (±2 → ratio ∈ [0.135, 7.39]). With CLIP_EPS=0.2
+        # the policy gradient is already saturated outside [0.8, 1.2], so a
+        # ±10 clamp (ratio up to 22000) only serves to inflate `ratio_max` and
+        # blow up Adam's gradient estimates the moment a single sample lands far
+        # in the tail of the importance-sampling distribution.
+        log_ratio = torch.clamp(log_prob_new - batch.log_prob, -2.0, 2.0)
         ratio = torch.exp(log_ratio)
 
         adv_norm = torch.clamp(batch.advantage, -5.0, 5.0)
@@ -365,7 +379,15 @@ class PPOTrainer:
                 )
 
         grad_norm = nn.utils.clip_grad_norm_(self.net.parameters(), MAX_GRAD)
-        self.optimizer.step()
+        # Skip the step on truly catastrophic batches (pre-clip norm > 10× the
+        # clip target). Clipping alone preserves direction, but a 100× spike
+        # often signals a numerical anomaly — skipping is safer than scaling.
+        grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+        skipped_step = grad_norm_val > 10.0 * MAX_GRAD
+        if skipped_step:
+            self.optimizer.zero_grad()
+        else:
+            self.optimizer.step()
 
         # ── Diagnostics ──────────────────────────────────────────────
         with torch.no_grad():
@@ -391,14 +413,48 @@ class PPOTrainer:
             "value_pred_max":  value.max().item(),
             "adv_mb_mean":     batch.advantage.mean().item(),
             "adv_mb_std":      batch.advantage.std().item(),
-            "grad_norm":       grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm,
+            "grad_norm":       grad_norm_val,
+            "skipped_step":    int(skipped_step),
         }
         return info
 
     # ──────────────────────────────────────────────────────────────────
+    def anneal_lr(self, update_idx: int) -> float:
+        """Linearly decay LR from base → 0 over the configured run length.
+
+        Called once per outer-loop update (BEFORE update()). update_idx is
+        1-indexed. Returns the new LR for logging.
+        """
+        frac = max(0.0, 1.0 - (update_idx - 1) / float(self._total_updates))
+        new_lr = self._base_lr * frac
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = new_lr
+        self._cur_lr = new_lr
+        return new_lr
+
+    # ──────────────────────────────────────────────────────────────────
     def update(self, batch: RolloutBatch) -> dict:
-        """Run N_EPOCHS of PPO updates with KL early stopping."""
+        """Run N_EPOCHS of PPO updates with running-mean KL early stopping.
+
+        Stop conditions, evaluated AFTER each minibatch:
+          * mid-epoch break: running-mean approx_kl > 1.5 × TARGET_KL
+            (catches a divergence the moment it happens, before the rest of
+            the epoch makes it worse).
+          * end-of-epoch break: running-mean approx_kl > TARGET_KL.
+
+        The running mean (instead of the last-minibatch value) avoids stopping
+        on a single noisy minibatch and avoids missing a steady drift that the
+        old "check the very last minibatch only" logic would happily ignore.
+        """
         total_samples = batch.cnn_feat.shape[0]
+
+        kl_sum = 0.0
+        kl_n   = 0
+        skipped_total = 0
+        last_info = {}
+        early_stop_epoch = ""
+        epoch = 0
+        stop = False
 
         for epoch in range(N_EPOCHS):
             perm = torch.randperm(total_samples, device=self.device)
@@ -407,14 +463,35 @@ class PPOTrainer:
                 idx = perm[start : start + MINIBATCH_SZ]
                 mb  = batch[idx]
                 info = self.ppo_update_step(mb)
+                last_info = info
 
-            # Early stop if policy changed too much
-            if info["approx_kl"] > TARGET_KL:
-                info["early_stop_epoch"] = epoch + 1
+                kl_sum += float(info["approx_kl"])
+                kl_n   += 1
+                skipped_total += int(info.get("skipped_step", 0))
+
+                running_kl = kl_sum / max(1, kl_n)
+
+                # Mid-epoch hard break — KL has clearly exploded.
+                if running_kl > 1.5 * TARGET_KL:
+                    early_stop_epoch = epoch + 1
+                    stop = True
+                    break
+
+            if stop:
                 break
 
-        info["epochs_run"] = epoch + 1
-        return info
+            # Soft end-of-epoch break — policy has drifted enough.
+            running_kl = kl_sum / max(1, kl_n)
+            if running_kl > TARGET_KL:
+                early_stop_epoch = epoch + 1
+                break
+
+        last_info["epochs_run"]       = epoch + 1
+        last_info["early_stop_epoch"] = early_stop_epoch
+        last_info["running_kl"]       = kl_sum / max(1, kl_n)
+        last_info["skipped_steps"]    = skipped_total
+        last_info["lr"]               = self._cur_lr
+        return last_info
 
     # ──────────────────────────────────────────────────────────────────
     def save(self, path: str):

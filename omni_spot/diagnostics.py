@@ -6,6 +6,8 @@ Ported from ppo_diagnostics.py. Framework-agnostic (uses plain floats/dicts).
 
 import numpy as np
 
+from .config import MAX_GRAD
+
 
 def compute_explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     """Explained variance: 1 - Var(y_true - y_pred) / Var(y_true)."""
@@ -69,7 +71,10 @@ def print_diagnostics(update: int, rollout_diag: dict, update_diag: dict):
     lines.append("")
     lines.append("  [GRADIENT HEALTH]")
     lines.append(f"    grad_global_norm: {ud.get('grad_norm', 0.0):>10.6f}  "
-                 f"(clipped to {0.5})")
+                 f"(clipped to {MAX_GRAD})")
+    if ud.get('skipped_steps', 0):
+        lines.append(f"    skipped_steps   : {ud.get('skipped_steps', 0):>10d}  "
+                     f"(grad_norm > 10x MAX_GRAD)")
 
     # ── 6. Reward Components ─────────────────────────────────────────
     if 'reward_components' in rd:
