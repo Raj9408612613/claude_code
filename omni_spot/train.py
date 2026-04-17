@@ -100,17 +100,68 @@ from .ppo import PPOTrainer
 from .diagnostics import print_diagnostics
 
 
+REWARD_COMPONENT_KEYS = (
+    "r_progress", "r_goal", "r_collision", "r_near",
+    "r_upright", "r_height", "r_energy", "r_smooth",
+    "r_alive", "r_heading", "dist_goal",
+)
+
+CSV_FIELDS = (
+    # Identity / timing
+    "update", "timesteps", "wall_time", "rollout_sec", "update_sec", "sps",
+    # Rollout reward stats
+    "rew_mean", "rew_min", "rew_max", "done_rate", "ep_count",
+    # Returns & advantages
+    "ret_raw_mean", "ret_raw_std", "ret_raw_min", "ret_raw_max",
+    "ret_norm_mean", "ret_norm_std", "ret_norm_min", "ret_norm_max",
+    "ret_scale_mean", "ret_scale_std",
+    "adv_mean", "adv_std", "adv_min", "adv_max",
+    # Value predictions
+    "val_raw_mean", "val_raw_std", "val_raw_min", "val_raw_max",
+    "explained_var",
+    # Policy health
+    "action_mean_abs", "action_std_mean", "entropy",
+    "approx_kl", "clip_frac", "ratio_mean", "ratio_max",
+    # Loss components
+    "policy_loss", "value_loss", "total_loss",
+    # Gradient health
+    "grad_norm",
+    # PPO update loop
+    "epochs_run", "early_stop_epoch",
+    # Observation health
+    "proprio_mean", "proprio_std", "proprio_nan_frac",
+    "cnn_feat_mean", "cnn_feat_std", "cnn_feat_nan_frac",
+    # Reward components (per-step mean)
+    *REWARD_COMPONENT_KEYS,
+)
+
+
+def _fmt(x, spec=".6g"):
+    try:
+        return format(float(x), spec)
+    except (TypeError, ValueError):
+        return ""
+
+
 class SimpleLogger:
-    """CSV + TensorBoard logger. Same as mjx_train.py version."""
+    """Progressive CSV + TensorBoard logger.
+
+    Every update appends a fully-flattened row (all diagnostic fields) and
+    flushes to disk immediately so crash-mid-run still leaves usable logs.
+    """
 
     def __init__(self, log_dir: str, run_id: str):
         self.log_dir = os.path.join(log_dir, run_id)
         os.makedirs(self.log_dir, exist_ok=True)
         self.csv_path = os.path.join(self.log_dir, "train_log.csv")
         self.csv_file = open(self.csv_path, "w", newline="")
-        self.csv_writer = None
+        self.csv_writer = csv.DictWriter(
+            self.csv_file, fieldnames=list(CSV_FIELDS), extrasaction="ignore"
+        )
+        self.csv_writer.writeheader()
+        self.csv_file.flush()
+        print(f"[LOG] CSV logging to {self.csv_path}")
 
-        # TensorBoard (optional)
         self.tb_writer = None
         try:
             from torch.utils.tensorboard import SummaryWriter
@@ -122,40 +173,94 @@ class SimpleLogger:
 
     def log(self, update, timesteps, wall_time, rollout_stats, update_info,
             rollout_sec, update_sec):
-        row = {
-            "update": update,
-            "timesteps": timesteps,
-            "wall_time": f"{wall_time:.1f}",
-            "rew_mean": f"{rollout_stats['rew_mean']:.4f}",
-            "rew_min":  f"{rollout_stats['rew_min']:.4f}",
-            "rew_max":  f"{rollout_stats['rew_max']:.4f}",
-            "done_rate": f"{rollout_stats['done_rate']:.4f}",
-            "ep_count": rollout_stats['ep_count'],
-            "policy_loss": f"{update_info.get('policy_loss', 0):.6f}",
-            "value_loss":  f"{update_info.get('value_loss', 0):.6f}",
-            "entropy":     f"{update_info.get('entropy', 0):.6f}",
-            "total_loss":  f"{update_info.get('total_loss', 0):.6f}",
-            "rollout_sec": f"{rollout_sec:.2f}",
-            "update_sec":  f"{update_sec:.2f}",
-        }
+        diag = rollout_stats.get("_diag", {}) or {}
+        rew_components = diag.get("reward_components", {}) or {}
+        sps = (timesteps / wall_time) if wall_time > 0 else 0.0
 
-        if self.csv_writer is None:
-            self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=row.keys())
-            self.csv_writer.writeheader()
+        row = {
+            "update":           update,
+            "timesteps":        timesteps,
+            "wall_time":        _fmt(wall_time, ".3f"),
+            "rollout_sec":      _fmt(rollout_sec, ".3f"),
+            "update_sec":       _fmt(update_sec, ".3f"),
+            "sps":              _fmt(sps, ".1f"),
+            "rew_mean":         _fmt(rollout_stats.get("rew_mean")),
+            "rew_min":          _fmt(rollout_stats.get("rew_min")),
+            "rew_max":          _fmt(rollout_stats.get("rew_max")),
+            "done_rate":        _fmt(rollout_stats.get("done_rate")),
+            "ep_count":         rollout_stats.get("ep_count", 0),
+            "ret_raw_mean":     _fmt(diag.get("ret_raw_mean")),
+            "ret_raw_std":      _fmt(diag.get("ret_raw_std")),
+            "ret_raw_min":      _fmt(diag.get("ret_raw_min")),
+            "ret_raw_max":      _fmt(diag.get("ret_raw_max")),
+            "ret_norm_mean":    _fmt(diag.get("ret_norm_mean")),
+            "ret_norm_std":     _fmt(diag.get("ret_norm_std")),
+            "ret_norm_min":     _fmt(diag.get("ret_norm_min")),
+            "ret_norm_max":     _fmt(diag.get("ret_norm_max")),
+            "ret_scale_mean":   _fmt(diag.get("ret_scale_mean")),
+            "ret_scale_std":    _fmt(diag.get("ret_scale_std")),
+            "adv_mean":         _fmt(diag.get("adv_mean")),
+            "adv_std":          _fmt(diag.get("adv_std")),
+            "adv_min":          _fmt(diag.get("adv_min")),
+            "adv_max":          _fmt(diag.get("adv_max")),
+            "val_raw_mean":     _fmt(diag.get("val_raw_mean")),
+            "val_raw_std":      _fmt(diag.get("val_raw_std")),
+            "val_raw_min":      _fmt(diag.get("val_raw_min")),
+            "val_raw_max":      _fmt(diag.get("val_raw_max")),
+            "explained_var":    _fmt(diag.get("explained_var")),
+            "action_mean_abs":  _fmt(update_info.get("action_mean_abs")),
+            "action_std_mean":  _fmt(update_info.get("action_std_mean")),
+            "entropy":          _fmt(update_info.get("entropy")),
+            "approx_kl":        _fmt(update_info.get("approx_kl")),
+            "clip_frac":        _fmt(update_info.get("clip_frac")),
+            "ratio_mean":       _fmt(update_info.get("ratio_mean")),
+            "ratio_max":        _fmt(update_info.get("ratio_max")),
+            "policy_loss":      _fmt(update_info.get("policy_loss")),
+            "value_loss":       _fmt(update_info.get("value_loss")),
+            "total_loss":       _fmt(update_info.get("total_loss")),
+            "grad_norm":        _fmt(update_info.get("grad_norm")),
+            "epochs_run":       update_info.get("epochs_run", ""),
+            "early_stop_epoch": update_info.get("early_stop_epoch", ""),
+            "proprio_mean":     _fmt(diag.get("proprio_mean")),
+            "proprio_std":      _fmt(diag.get("proprio_std")),
+            "proprio_nan_frac": _fmt(diag.get("proprio_nan_frac")),
+            "cnn_feat_mean":    _fmt(diag.get("cnn_feat_mean")),
+            "cnn_feat_std":     _fmt(diag.get("cnn_feat_std")),
+            "cnn_feat_nan_frac": _fmt(diag.get("cnn_feat_nan_frac")),
+        }
+        for k in REWARD_COMPONENT_KEYS:
+            row[k] = _fmt(rew_components.get(k))
+
         self.csv_writer.writerow(row)
         self.csv_file.flush()
+        try:
+            os.fsync(self.csv_file.fileno())
+        except (OSError, AttributeError):
+            pass
 
         if self.tb_writer:
-            self.tb_writer.add_scalar("reward/mean", rollout_stats["rew_mean"], timesteps)
-            self.tb_writer.add_scalar("reward/min",  rollout_stats["rew_min"],  timesteps)
-            self.tb_writer.add_scalar("reward/max",  rollout_stats["rew_max"],  timesteps)
-            self.tb_writer.add_scalar("episode/done_rate", rollout_stats["done_rate"], timesteps)
-            self.tb_writer.add_scalar("loss/policy", update_info.get("policy_loss", 0), timesteps)
-            self.tb_writer.add_scalar("loss/value",  update_info.get("value_loss", 0), timesteps)
-            self.tb_writer.add_scalar("loss/entropy", update_info.get("entropy", 0), timesteps)
-            self.tb_writer.add_scalar("loss/total",  update_info.get("total_loss", 0), timesteps)
-            self.tb_writer.add_scalar("timing/rollout_sec", rollout_sec, timesteps)
-            self.tb_writer.add_scalar("timing/update_sec",  update_sec, timesteps)
+            tb = self.tb_writer
+            tb.add_scalar("reward/mean", rollout_stats["rew_mean"], timesteps)
+            tb.add_scalar("reward/min",  rollout_stats["rew_min"],  timesteps)
+            tb.add_scalar("reward/max",  rollout_stats["rew_max"],  timesteps)
+            tb.add_scalar("episode/done_rate", rollout_stats["done_rate"], timesteps)
+            tb.add_scalar("episode/ep_count",  rollout_stats["ep_count"],  timesteps)
+            for k in ("policy_loss", "value_loss", "total_loss", "entropy",
+                      "approx_kl", "clip_frac", "ratio_mean", "ratio_max",
+                      "grad_norm", "action_std_mean", "action_mean_abs"):
+                if k in update_info:
+                    tb.add_scalar(f"ppo/{k}", update_info[k], timesteps)
+            for k in ("explained_var", "ret_raw_mean", "ret_raw_std",
+                      "val_raw_mean", "val_raw_std",
+                      "adv_mean", "adv_std",
+                      "proprio_nan_frac", "cnn_feat_nan_frac"):
+                if k in diag:
+                    tb.add_scalar(f"diag/{k}", diag[k], timesteps)
+            for k, v in rew_components.items():
+                tb.add_scalar(f"reward_components/{k}", v, timesteps)
+            tb.add_scalar("timing/rollout_sec", rollout_sec, timesteps)
+            tb.add_scalar("timing/update_sec",  update_sec, timesteps)
+            tb.add_scalar("timing/sps", sps, timesteps)
 
     def close(self):
         self.csv_file.close()
