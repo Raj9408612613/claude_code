@@ -113,6 +113,14 @@ class PPOTrainer:
         # ── Optimizer (Adam with gradient clipping) ───────────────────
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
 
+        # Running stats for return normalization (PopArt-style).
+        # The critic is trained on normalized returns; GAE consumes the
+        # denormalized values so reward and V(s) are on the same scale.
+        # Stored as Python floats so they survive checkpoint save/load cleanly.
+        self._ret_mean = 0.0
+        self._ret_std  = 1.0
+        self._ret_ema_alpha = 0.05  # ~20-update effective window
+
     # ──────────────────────────────────────────────────────────────────
     @torch.no_grad()
     def sample_action(self, obs: dict) -> tuple:
@@ -189,22 +197,44 @@ class PPOTrainer:
                         reward_sums[k] = reward_sums[k] + v
             reward_count += 1
 
-        # Bootstrap value for last step
+        # Bootstrap value for last step (critic output is in NORMALIZED scale).
         _, _, last_value, _ = self.sample_action(obs)
 
         # Stack: (T, B, ...)
-        rewards = torch.stack(buf_rewards)
-        dones   = torch.stack(buf_dones)
-        stacked_values = torch.stack(buf_values)
-        values = torch.cat([stacked_values, last_value.unsqueeze(0)], dim=0)
+        rewards        = torch.stack(buf_rewards)
+        dones          = torch.stack(buf_dones)
+        stacked_values = torch.stack(buf_values)   # normalized critic outputs, (T, B)
+        values_norm    = torch.cat([stacked_values, last_value.unsqueeze(0)], dim=0)
 
-        advantages, returns = compute_gae(rewards, values, dones)
+        # Denormalize critic outputs to raw-return scale before GAE so that
+        # δ = r + γV(s') − V(s) is unit-consistent with the raw reward.
+        # Running stats are identity (mean=0, std=1) on update 1 and bootstrapped
+        # below from the first batch, so the first rollout's GAE is unchanged
+        # but subsequent ones use a meaningful baseline.
+        values_raw = values_norm * self._ret_std + self._ret_mean
 
-        # Normalize returns and old values with SAME scale
-        ret_mean = returns.mean()
-        ret_std  = returns.std() + 1e-8
-        returns_norm    = (returns        - ret_mean) / ret_std
-        old_values_norm = (stacked_values - ret_mean) / ret_std
+        advantages, returns = compute_gae(rewards, values_raw, dones)
+
+        # Update running return stats from THIS batch's returns.
+        batch_ret_mean = float(returns.mean())
+        batch_ret_std  = float(returns.std()) + 1e-8
+        if self._ret_mean == 0.0 and self._ret_std == 1.0:
+            # First update: bootstrap directly from the batch so the critic
+            # target isn't trained against (R − 0) / 1 for ~20 updates.
+            self._ret_mean = batch_ret_mean
+            self._ret_std  = batch_ret_std
+        else:
+            a = self._ret_ema_alpha
+            self._ret_mean = (1.0 - a) * self._ret_mean + a * batch_ret_mean
+            self._ret_std  = (1.0 - a) * self._ret_std  + a * batch_ret_std
+
+        # Critic training target: normalize with RUNNING stats (not per-batch) so
+        # the critic sees a consistent target distribution across updates.
+        returns_norm    = (returns - self._ret_mean) / self._ret_std
+        old_values_norm = stacked_values  # already normalized (raw critic output)
+
+        # Raw-scale values for diagnostics (T, B)
+        stacked_values_raw = values_raw[:-1]
 
         # Flatten (T*B, ...)
         def flat(x):
@@ -255,12 +285,12 @@ class PPOTrainer:
             "adv_std":           float(adv_norm.std()),
             "adv_min":           float(adv_norm.min()),
             "adv_max":           float(adv_norm.max()),
-            "val_raw_mean":      float(stacked_values.mean()),
-            "val_raw_std":       float(stacked_values.std()),
-            "val_raw_min":       float(stacked_values.min()),
-            "val_raw_max":       float(stacked_values.max()),
+            "val_raw_mean":      float(stacked_values_raw.mean()),
+            "val_raw_std":       float(stacked_values_raw.std()),
+            "val_raw_min":       float(stacked_values_raw.min()),
+            "val_raw_max":       float(stacked_values_raw.max()),
             "explained_var":     float(
-                1.0 - torch.var(returns - stacked_values)
+                1.0 - torch.var(returns - stacked_values_raw)
                 / (torch.var(returns) + 1e-8)
             ),
             "proprio_mean":      float(stacked_proprio.mean()),
@@ -391,6 +421,8 @@ class PPOTrainer:
         torch.save({
             "model_state_dict": self.net.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "ret_mean": self._ret_mean,
+            "ret_std":  self._ret_std,
         }, path)
 
     def load(self, path: str):
@@ -398,3 +430,7 @@ class PPOTrainer:
         self.net.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "ret_mean" in ckpt:
+            self._ret_mean = float(ckpt["ret_mean"])
+        if "ret_std" in ckpt:
+            self._ret_std = float(ckpt["ret_std"])
