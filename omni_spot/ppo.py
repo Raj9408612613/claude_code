@@ -3,6 +3,7 @@ PyTorch PPO Trainer
 ====================
 Ported from jax_ppo.py. Preserves all hyperparameters, GAE computation,
 value clipping, NaN guards, KL early stopping, and CNN feature caching.
+this file is the code for the PPO policy. Dictates how the policy will run and calculate rewards and updates.
 """
 
 import time
