@@ -13,7 +13,7 @@ Architecture (identical to JAX version):
                     Value  head -> 1 scalar
 
 all the above is now changed to run on the isaac sim and rl-games(isaac gym environment). 
-instead of importing JAX we now import torch.
+instead of importing FLAX/JAX we now import torch.
 """
 
 import math
