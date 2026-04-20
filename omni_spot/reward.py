@@ -19,6 +19,7 @@ def compute_reward(
     robot_quat:      torch.Tensor,   # (B, 4)  w, x, y, z
     goal_pos:        torch.Tensor,   # (B, 2)
     prev_robot_pos:  torch.Tensor,   # (B, 3)
+    root_lin_vel:    torch.Tensor,   # (B, 3)
     joint_vel:       torch.Tensor,   # (B, 12)
     action:          torch.Tensor,   # (B, 12)
     prev_action:     torch.Tensor,   # (B, 12)
@@ -81,11 +82,18 @@ def compute_reward(
     fwd_norm = fwd_norm / (torch.linalg.norm(fwd_norm, dim=-1, keepdim=True) + 1e-8)
     heading_dot = torch.sum(fwd_norm * goal_dir_norm, dim=-1)
     r_heading = heading_dot * HEADING_W
-
+    # ── 10. Velocity tracking (smooth forward-progress signal) ─────────
+    # Project linear velocity onto direction-to-goal.
+    # Positive = moving toward goal, negative = moving away.
+    vel_xy = root_lin_vel[:, :2]
+    vel_toward_goal = torch.sum(vel_xy * goal_dir_norm, dim=-1)  # (B,) in m/s
+    # Saturate so we don't reward pathological fast glitches
+    vel_toward_goal_capped = torch.clamp(vel_toward_goal, -VEL_TRACK_CAP, VEL_TRACK_CAP)
+    r_vel_track = vel_toward_goal_capped * VEL_TRACK_W
     # ── Total ───────────────────────────────────────────────────────────
     total = (r_progress + r_goal + r_collision + r_near
              + r_upright + r_height + r_energy + r_smooth
-             + r_alive + r_heading)
+             + r_alive + r_heading + r_vel_track)
 
     # Guard: replace NaN/inf with 0 and clip to finite range
     total = torch.where(torch.isfinite(total), total, torch.zeros_like(total))
@@ -103,6 +111,8 @@ def compute_reward(
         "r_alive":     r_alive,
         "r_heading":   r_heading,
         "dist_goal":   dist_goal,
+        "r_vel_track": r_vel_track,
+}
     }
     return total, info, dist_goal
 
