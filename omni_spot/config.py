@@ -9,7 +9,7 @@ All hyperparameters preserved exactly from the JAX version.
 GAMMA        = 0.99
 GAE_LAMBDA   = 0.95
 CLIP_EPS     = 0.2
-ENT_COEF     = 0.01
+ENT_COEF     = 0.001
 VF_COEF      = 1.0
 MAX_GRAD     = 1.5
 LR           = 3e-4
@@ -22,21 +22,21 @@ CNN_FEAT_DIM = 256
 PROPRIO_DIM  = 37
 ACTION_DIM   = 12
 LOG_STD_MIN  = -5.0
-LOG_STD_MAX  =  2.0
+LOG_STD_MAX  =  0.5
 
 # ── Reward weights (from jax_reward.py) ──────────────────────────────────────
-GOAL_BONUS       =   200.0
+GOAL_BONUS       =    20.0
 GOAL_TOL         =     0.5    # metres
-PROGRESS_W       =    50.0
+PROGRESS_W       =    10.0
 COLLISION_PEN    =   -10.0
 NEAR_COLL_PEN    =    -2.0
 NEAR_COLL_THRESH =    0.35   # metres
-UPRIGHT_W        =    -0.3
-HEIGHT_W         =    -1.0
+UPRIGHT_W        =    -2.0
+HEIGHT_W         =    -3.0
 TARGET_HEIGHT    =    0.46   # real Spot standing height (m)
-ENERGY_W         =  -0.005
+ENERGY_W         =  -0.001
 SMOOTH_W         =  -0.002
-ALIVE_BONUS      =     0.5
+ALIVE_BONUS      =     1.0
 HEADING_W        =     0.3
 # Velocity tracking toward goal
 VEL_TRACK_W = 1.0    # reward per (m/s) of goal-directed velocity

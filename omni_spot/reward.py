@@ -120,16 +120,13 @@ def check_termination(
     robot_pos:   torch.Tensor,   # (B, 3)
     robot_quat:  torch.Tensor,   # (B, 4)
     goal_pos:    torch.Tensor,   # (B, 2)
-    step_count:  torch.Tensor,   # (B,) int32
-    max_steps:   int = 1000,
     min_height:  float = 0.2,
     max_tilt:    float = 1.0472,   # pi/3
 ) -> torch.Tensor:
     """
-    Returns terminated (B,) bool.
-    Fallen: height < min_height or tilt > max_tilt.
-    Goal:   dist < GOAL_TOL.
-    Timeout: step_count >= max_steps.
+    Returns terminated (B,) bool — TRUE termination only (fallen or goal reached).
+    Timeout (step_count >= max_steps) is a TRUNCATION, not termination; the caller
+    handles it separately so GAE can bootstrap from V(s') instead of zeroing it.
     """
     w, x, y, z = robot_quat[:, 0], robot_quat[:, 1], robot_quat[:, 2], robot_quat[:, 3]
     cos_tilt = 1.0 - 2.0 * (x ** 2 + y ** 2)
@@ -137,5 +134,4 @@ def check_termination(
 
     fallen  = (robot_pos[:, 2] < min_height) | (tilt > max_tilt)
     at_goal = torch.linalg.norm(goal_pos - robot_pos[:, :2], dim=-1) < GOAL_TOL
-    timeout = step_count >= max_steps
-    return fallen | at_goal | timeout
+    return fallen | at_goal

@@ -344,68 +344,72 @@ def main():
     train_start = time.time()
     best_reward = float("-inf")
 
-    for update in range(1, args.total_updates + 1):
-        do_profile = args.profile > 0 and update <= args.profile
+    try:
+        for update in range(1, args.total_updates + 1):
+            do_profile = args.profile > 0 and update <= args.profile
 
-        # Anneal LR linearly toward 0 over the run BEFORE this update.
-        trainer.anneal_lr(update)
+            # Anneal LR linearly toward 0 over the run BEFORE this update.
+            trainer.anneal_lr(update)
 
-        # Collect rollout
-        t_roll = time.time()
-        obs, batch, rollout_stats = trainer.collect_rollout(
-            env, obs, profile=do_profile,
-        )
-        rollout_sec = time.time() - t_roll
+            # Collect rollout
+            t_roll = time.time()
+            obs, batch, rollout_stats = trainer.collect_rollout(
+                env, obs, profile=do_profile,
+            )
+            rollout_sec = time.time() - t_roll
 
-        # PPO update
-        t_upd = time.time()
-        update_info = trainer.update(batch)
-        update_sec = time.time() - t_upd
+            # PPO update
+            t_upd = time.time()
+            update_info = trainer.update(batch)
+            update_sec = time.time() - t_upd
 
-        # Profiling
-        if do_profile:
-            timing = rollout_stats.get("_timing", {})
-            if timing:
-                print(f"  [PROFILE update {update}] "
-                      f"inference={timing.get('inference_sec', 0):.2f}s  "
-                      f"env_step={timing.get('env_step_sec', 0):.2f}s")
-            report_gpu_memory(f"after update {update}")
+            # Profiling
+            if do_profile:
+                timing = rollout_stats.get("_timing", {})
+                if timing:
+                    print(f"  [PROFILE update {update}] "
+                          f"inference={timing.get('inference_sec', 0):.2f}s  "
+                          f"env_step={timing.get('env_step_sec', 0):.2f}s")
+                report_gpu_memory(f"after update {update}")
 
-        total_timesteps += args.num_envs * args.n_steps
-        wall_time = time.time() - train_start
+            total_timesteps += args.num_envs * args.n_steps
+            wall_time = time.time() - train_start
 
-        # Log
-        if update % args.log_interval == 0:
-            mean_rew = rollout_stats["rew_mean"]
-            sps = (args.num_envs * args.n_steps) / (rollout_sec + update_sec)
-            print(f"[{update:>4d}/{args.total_updates}]  "
-                  f"rew={mean_rew:>8.2f}  "
-                  f"eps={rollout_stats['ep_count']:>5d}  "
-                  f"roll={rollout_sec:.1f}s  upd={update_sec:.1f}s  "
-                  f"SPS={sps:,.0f}  total={total_timesteps:,}")
+            # Log
+            if update % args.log_interval == 0:
+                mean_rew = rollout_stats["rew_mean"]
+                sps = (args.num_envs * args.n_steps) / (rollout_sec + update_sec)
+                print(f"[{update:>4d}/{args.total_updates}]  "
+                      f"rew={mean_rew:>8.2f}  "
+                      f"eps={rollout_stats['ep_count']:>5d}  "
+                      f"roll={rollout_sec:.1f}s  upd={update_sec:.1f}s  "
+                      f"SPS={sps:,.0f}  total={total_timesteps:,}")
 
-            logger.log(update, total_timesteps, wall_time,
-                       rollout_stats, update_info, rollout_sec, update_sec)
+                logger.log(update, total_timesteps, wall_time,
+                           rollout_stats, update_info, rollout_sec, update_sec)
 
-            # Diagnostics
-            diag = rollout_stats.get("_diag", {})
-            if diag:
-                print_diagnostics(update, diag, update_info)
+                # Diagnostics
+                diag = rollout_stats.get("_diag", {})
+                if diag:
+                    print_diagnostics(update, diag, update_info)
 
-        # Save
-        if update % args.save_interval == 0:
-            path = os.path.join(logger.log_dir, f"ckpt_{update:05d}.pt")
-            trainer.save(path)
-            print(f"  [SAVE] {path}")
+                # Best checkpoint only at log boundaries (avoids saving every step
+                # when reward is noisy and monotonically climbing by chance).
+                if rollout_stats["rew_mean"] > best_reward:
+                    best_reward = rollout_stats["rew_mean"]
+                    trainer.save(os.path.join(logger.log_dir, "best.pt"))
 
-        if rollout_stats["rew_mean"] > best_reward:
-            best_reward = rollout_stats["rew_mean"]
-            trainer.save(os.path.join(logger.log_dir, "best.pt"))
+            # Periodic checkpoint
+            if update % args.save_interval == 0:
+                path = os.path.join(logger.log_dir, f"ckpt_{update:05d}.pt")
+                trainer.save(path)
+                print(f"  [SAVE] {path}")
 
-    # Final save
-    trainer.save(os.path.join(logger.log_dir, "final.pt"))
-    logger.close()
-    print(f"\n[DONE] Training complete. {total_timesteps:,} total timesteps.")
+    finally:
+        # Always save and clean up, even on crash or KeyboardInterrupt
+        trainer.save(os.path.join(logger.log_dir, "final.pt"))
+        logger.close()
+        print(f"\n[DONE] Training complete. {total_timesteps:,} total timesteps.")
 
     # Write success marker (smoke_test.sh checks this to avoid false positives
     # from Isaac Sim's shutdown masking the Python exit code)

@@ -31,7 +31,7 @@ class RolloutBatch:
     """
     __slots__ = [
         "cnn_feat", "proprio", "action", "log_prob",
-        "advantage", "ret", "old_value",
+        "advantage", "ret",
     ]
 
     def __init__(
@@ -42,7 +42,6 @@ class RolloutBatch:
         log_prob:  torch.Tensor,   # (T*B,)
         advantage: torch.Tensor,   # (T*B,)
         ret:       torch.Tensor,   # (T*B,) normalized return
-        old_value: torch.Tensor,   # (T*B,) normalized old value
     ):
         self.cnn_feat  = cnn_feat
         self.proprio   = proprio
@@ -50,7 +49,6 @@ class RolloutBatch:
         self.log_prob  = log_prob
         self.advantage = advantage
         self.ret       = ret
-        self.old_value = old_value
 
     def __getitem__(self, idx):
         return RolloutBatch(
@@ -60,29 +58,35 @@ class RolloutBatch:
             log_prob  = self.log_prob[idx],
             advantage = self.advantage[idx],
             ret       = self.ret[idx],
-            old_value = self.old_value[idx],
         )
 
 
 # ── GAE Advantage Computation ────────────────────────────────────────────────
 
 def compute_gae(
-    rewards: torch.Tensor,   # (T, B)
-    values:  torch.Tensor,   # (T+1, B)
-    dones:   torch.Tensor,   # (T, B)
+    rewards:    torch.Tensor,   # (T, B)
+    values:     torch.Tensor,   # (T+1, B)  denormalized
+    dones:      torch.Tensor,   # (T, B)    terminated | truncated
+    terminated: torch.Tensor,   # (T, B)    true termination only (fallen / goal)
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Returns advantages (T,B) and returns (T,B).
 
-    Matches JAX compute_gae exactly.
+    Uses separate masks:
+      mask_bootstrap = 1 - terminated[t]: zeroes V(s') only when the episode
+        truly ends (fallen / goal reached), NOT on timeout truncation — so the
+        critic correctly bootstraps from the future on truncated episodes.
+      mask_gae = 1 - dones[t]: resets the GAE accumulator on ANY episode end
+        (including timeout), preventing advantage bleed across episode boundaries.
     """
     T = rewards.shape[0]
     advantages = torch.zeros_like(rewards)
     gae = torch.zeros(rewards.shape[1], device=rewards.device)
 
     for t in reversed(range(T)):
-        mask  = 1.0 - dones[t]
-        delta = rewards[t] + GAMMA * values[t + 1] * mask - values[t]
-        gae   = delta + GAMMA * GAE_LAMBDA * mask * gae
+        mask_bootstrap = 1.0 - terminated[t]
+        mask_gae       = 1.0 - dones[t]
+        delta = rewards[t] + GAMMA * values[t + 1] * mask_bootstrap - values[t]
+        gae   = delta + GAMMA * GAE_LAMBDA * mask_gae * gae
         advantages[t] = gae
 
     returns = advantages + values[:T]
@@ -122,6 +126,7 @@ class PPOTrainer:
         self._ret_mean = 0.0
         self._ret_std  = 1.0
         self._ret_ema_alpha = 0.05  # ~20-update effective window
+        self._stats_initialized = False
 
         # ── LR annealing ──────────────────────────────────────────────
         # Linearly decay LR from base → 0 over the run. Smaller updates
@@ -150,13 +155,14 @@ class PPOTrainer:
             batch:         RolloutBatch
             rollout_stats: dict with reward/episode metrics
         """
-        buf_cnn_feat = []
-        buf_proprio  = []
-        buf_actions  = []
-        buf_log_prob = []
-        buf_rewards  = []
-        buf_dones    = []
-        buf_values   = []
+        buf_cnn_feat    = []
+        buf_proprio     = []
+        buf_actions     = []
+        buf_log_prob    = []
+        buf_rewards     = []
+        buf_dones       = []
+        buf_terminated  = []
+        buf_values      = []
 
         reward_sums = None
         reward_count = 0
@@ -196,6 +202,7 @@ class PPOTrainer:
             done = terminated | truncated
             buf_rewards.append(reward)
             buf_dones.append(done.float())
+            buf_terminated.append(terminated.float())
 
             # Accumulate reward component running sums
             if reward_sums is None:
@@ -213,35 +220,52 @@ class PPOTrainer:
         # Stack: (T, B, ...)
         rewards        = torch.stack(buf_rewards)
         dones          = torch.stack(buf_dones)
+        terminated_buf = torch.stack(buf_terminated)
         stacked_values = torch.stack(buf_values)   # normalized critic outputs, (T, B)
         values_norm    = torch.cat([stacked_values, last_value.unsqueeze(0)], dim=0)
 
         # Denormalize critic outputs to raw-return scale before GAE so that
         # δ = r + γV(s') − V(s) is unit-consistent with the raw reward.
-        # Running stats are identity (mean=0, std=1) on update 1 and bootstrapped
-        # below from the first batch, so the first rollout's GAE is unchanged
-        # but subsequent ones use a meaningful baseline.
         values_raw = values_norm * self._ret_std + self._ret_mean
 
-        advantages, returns = compute_gae(rewards, values_raw, dones)
+        advantages, returns = compute_gae(rewards, values_raw, dones, terminated_buf)
 
-        # Update running return stats from THIS batch's returns.
+        # Update running return stats from THIS batch's returns (PopArt EMA).
         batch_ret_mean = float(returns.mean())
         batch_ret_std  = float(returns.std()) + 1e-8
-        if self._ret_mean == 0.0 and self._ret_std == 1.0:
-            # First update: bootstrap directly from the batch so the critic
-            # target isn't trained against (R − 0) / 1 for ~20 updates.
+
+        old_std  = self._ret_std
+        old_mean = self._ret_mean
+        was_initialized = self._stats_initialized
+
+        if not self._stats_initialized:
             self._ret_mean = batch_ret_mean
             self._ret_std  = batch_ret_std
+            self._stats_initialized = True
         else:
             a = self._ret_ema_alpha
             self._ret_mean = (1.0 - a) * self._ret_mean + a * batch_ret_mean
             self._ret_std  = (1.0 - a) * self._ret_std  + a * batch_ret_std
+        # H4: floor prevents division-by-zero when all episodes have equal returns
+        self._ret_std = max(self._ret_std, 1e-2)
+
+        new_std  = self._ret_std
+        new_mean = self._ret_mean
+
+        # M4: PopArt weight rescaling — when EMA stats shift, adjust critic1's
+        # output layer so the raw (denormalized) value predictions stay the same.
+        # Formula: W_new = W * (old_std / new_std),
+        #          b_new = b * (old_std / new_std) + (old_mean - new_mean) / new_std
+        if was_initialized and (abs(new_std - old_std) > 1e-6 or abs(new_mean - old_mean) > 1e-6):
+            with torch.no_grad():
+                ratio = old_std / new_std
+                self.net.critic1.weight.data.mul_(ratio)
+                self.net.critic1.bias.data.mul_(ratio)
+                self.net.critic1.bias.data.add_((old_mean - new_mean) / new_std)
 
         # Critic training target: normalize with RUNNING stats (not per-batch) so
         # the critic sees a consistent target distribution across updates.
-        returns_norm    = (returns - self._ret_mean) / self._ret_std
-        old_values_norm = stacked_values  # already normalized (raw critic output)
+        returns_norm = (returns - self._ret_mean) / self._ret_std
 
         # Raw-scale values for diagnostics (T, B)
         stacked_values_raw = values_raw[:-1]
@@ -266,7 +290,6 @@ class PPOTrainer:
             log_prob  = flat(torch.stack(buf_log_prob)),
             advantage = adv_norm,
             ret       = flat(returns_norm),
-            old_value = flat(old_values_norm),
         )
 
         # Rollout stats (host sync)
@@ -336,25 +359,19 @@ class PPOTrainer:
 
         # ── Policy loss with ratio clamping ──────────────────────────
         log_prob_new = gaussian_log_prob(mean, log_std, batch.action)
-        # Tight log-ratio clamp (±2 → ratio ∈ [0.135, 7.39]). With CLIP_EPS=0.2
-        # the policy gradient is already saturated outside [0.8, 1.2], so a
-        # ±10 clamp (ratio up to 22000) only serves to inflate `ratio_max` and
-        # blow up Adam's gradient estimates the moment a single sample lands far
-        # in the tail of the importance-sampling distribution.
-        log_ratio = torch.clamp(log_prob_new - batch.log_prob, -2.0, 2.0)
+        # Clamp to ±0.5 → ratio ∈ [0.61, 1.65]. With CLIP_EPS=0.2 the policy
+        # gradient saturates outside [0.8, 1.2]; clamping tightly stops
+        # importance-ratio spikes from dominating Adam's gradient estimates.
+        log_ratio = torch.clamp(log_prob_new - batch.log_prob, -0.5, 0.5)
         ratio = torch.exp(log_ratio)
 
-        adv_norm = torch.clamp(batch.advantage, -5.0, 5.0)
-
-        pg_loss1    = ratio * adv_norm
-        pg_loss2    = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
+        # Advantages are already globally normalized in collect_rollout;
+        # a second clamp here kills the tail gradients — removed (L3).
+        pg_loss1    = ratio * batch.advantage
+        pg_loss2    = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * batch.advantage
         policy_loss = -torch.mean(torch.minimum(pg_loss1, pg_loss2))
 
         # ── Value loss (simple MSE, no PPO clipping) ─────────────────
-        # PPO-style VF clipping was removed: batch.old_value is stored in
-        # normalised scale while value is raw network output, so the clip
-        # bound (-CLIP_EPS, +CLIP_EPS) was always saturated → zero gradient
-        # on vf_loss2 → asymmetric updates → critic converged to wrong value.
         value_loss = 0.5 * torch.mean((value - batch.ret) ** 2)
         value_loss = torch.clamp(value_loss, 0.0, 1_000_000.0)
 
@@ -364,9 +381,35 @@ class PPOTrainer:
         total = policy_loss + VF_COEF * value_loss - ENT_COEF * entropy
         total = torch.clamp(total, -1e6, 1e6)
 
-        # NaN guard
+        # ── Diagnostics (computed before backward so NaN guard can use them)
+        with torch.no_grad():
+            approx_kl = torch.mean((ratio - 1.0) - log_ratio).item()
+            clip_frac = torch.mean(
+                ((ratio < 1.0 - CLIP_EPS) | (ratio > 1.0 + CLIP_EPS)).float()
+            ).item()
+
+        # NaN guard — skip backward entirely when loss is non-finite
         if not torch.isfinite(total):
-            total = torch.tensor(0.0, device=total.device, requires_grad=True)
+            return {
+                "policy_loss":     policy_loss.item() if torch.isfinite(policy_loss) else 0.0,
+                "value_loss":      value_loss.item()  if torch.isfinite(value_loss)  else 0.0,
+                "entropy":         entropy.item(),
+                "total_loss":      0.0,
+                "ratio_mean":      ratio.mean().item(),
+                "ratio_max":       ratio.max().item(),
+                "approx_kl":       approx_kl,
+                "clip_frac":       clip_frac,
+                "action_mean_abs": mean.abs().mean().item(),
+                "action_std_mean": torch.exp(log_std).mean().item(),
+                "value_pred_mean": value.mean().item(),
+                "value_pred_std":  value.std().item(),
+                "value_pred_min":  value.min().item(),
+                "value_pred_max":  value.max().item(),
+                "adv_mb_mean":     batch.advantage.mean().item(),
+                "adv_mb_std":      batch.advantage.std().item(),
+                "grad_norm":       0.0,
+                "skipped_step":    1,
+            }
 
         # ── Backward + gradient clip ─────────────────────────────────
         self.optimizer.zero_grad()
@@ -380,22 +423,12 @@ class PPOTrainer:
                 )
 
         grad_norm = nn.utils.clip_grad_norm_(self.net.parameters(), MAX_GRAD)
-        # Skip the step on truly catastrophic batches (pre-clip norm > 10× the
-        # clip target). Clipping alone preserves direction, but a 100× spike
-        # often signals a numerical anomaly — skipping is safer than scaling.
         grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
         skipped_step = grad_norm_val > 10.0 * MAX_GRAD
         if skipped_step:
             self.optimizer.zero_grad()
         else:
             self.optimizer.step()
-
-        # ── Diagnostics ──────────────────────────────────────────────
-        with torch.no_grad():
-            approx_kl = torch.mean((ratio - 1.0) - log_ratio).item()
-            clip_frac = torch.mean(
-                ((ratio < 1.0 - CLIP_EPS) | (ratio > 1.0 + CLIP_EPS)).float()
-            ).item()
 
         info = {
             "policy_loss":     policy_loss.item(),
@@ -449,13 +482,12 @@ class PPOTrainer:
         """
         total_samples = batch.cnn_feat.shape[0]
 
-        kl_sum = 0.0
-        kl_n   = 0
+        running_kl    = None   # EMA KL (α=0.3) — recent minibatches weighted higher
         skipped_total = 0
-        last_info = {}
+        last_info     = {}
         early_stop_epoch = ""
         epoch = 0
-        stop = False
+        stop  = False
 
         for epoch in range(N_EPOCHS):
             perm = torch.randperm(total_samples, device=self.device)
@@ -466,11 +498,9 @@ class PPOTrainer:
                 info = self.ppo_update_step(mb)
                 last_info = info
 
-                kl_sum += float(info["approx_kl"])
-                kl_n   += 1
+                kl_val = float(info["approx_kl"])
+                running_kl = kl_val if running_kl is None else 0.3 * kl_val + 0.7 * running_kl
                 skipped_total += int(info.get("skipped_step", 0))
-
-                running_kl = kl_sum / max(1, kl_n)
 
                 # Mid-epoch hard break — KL has clearly exploded.
                 if running_kl > 1.5 * TARGET_KL:
@@ -482,14 +512,13 @@ class PPOTrainer:
                 break
 
             # Soft end-of-epoch break — policy has drifted enough.
-            running_kl = kl_sum / max(1, kl_n)
-            if running_kl > TARGET_KL:
+            if running_kl is not None and running_kl > TARGET_KL:
                 early_stop_epoch = epoch + 1
                 break
 
         last_info["epochs_run"]       = epoch + 1
         last_info["early_stop_epoch"] = early_stop_epoch
-        last_info["running_kl"]       = kl_sum / max(1, kl_n)
+        last_info["running_kl"]       = running_kl if running_kl is not None else 0.0
         last_info["skipped_steps"]    = skipped_total
         last_info["lr"]               = self._cur_lr
         return last_info
@@ -497,10 +526,14 @@ class PPOTrainer:
     # ──────────────────────────────────────────────────────────────────
     def save(self, path: str):
         torch.save({
-            "model_state_dict": self.net.state_dict(),
+            "model_state_dict":     self.net.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
-            "ret_mean": self._ret_mean,
-            "ret_std":  self._ret_std,
+            "ret_mean":             self._ret_mean,
+            "ret_std":              self._ret_std,
+            "stats_initialized":    self._stats_initialized,
+            "base_lr":              self._base_lr,
+            "total_updates":        self._total_updates,
+            "cur_lr":               self._cur_lr,
         }, path)
 
     def load(self, path: str):
@@ -512,3 +545,13 @@ class PPOTrainer:
             self._ret_mean = float(ckpt["ret_mean"])
         if "ret_std" in ckpt:
             self._ret_std = float(ckpt["ret_std"])
+        if "stats_initialized" in ckpt:
+            self._stats_initialized = bool(ckpt["stats_initialized"])
+        if "base_lr" in ckpt:
+            self._base_lr = float(ckpt["base_lr"])
+        if "total_updates" in ckpt:
+            self._total_updates = max(1, int(ckpt["total_updates"]))
+        if "cur_lr" in ckpt:
+            self._cur_lr = float(ckpt["cur_lr"])
+            for pg in self.optimizer.param_groups:
+                pg["lr"] = self._cur_lr

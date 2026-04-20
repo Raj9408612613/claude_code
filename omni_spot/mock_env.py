@@ -193,7 +193,7 @@ class MockSpotEnv:
         self._root_quat[:, 3] = torch.sin(yaw / 2)
         self._root_linvel[:, 0] = dx / 0.02
         self._root_linvel[:, 1] = dy / 0.02
-        self._prev_action = ctrl
+        self._prev_action = action.clone()
 
         # Humanoid patrol
         if HUMANOID_OBSTACLE["enabled"]:
@@ -227,8 +227,7 @@ class MockSpotEnv:
 
         # Termination
         terminated = check_termination(
-            self._root_pos, self._root_quat,
-            self._goal_pos, self._step_count,
+            self._root_pos, self._root_quat, self._goal_pos,
         )
         truncated = self._step_count >= 1000
         terminated = terminated & ~truncated

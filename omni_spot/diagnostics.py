@@ -6,7 +6,7 @@ Ported from ppo_diagnostics.py. Framework-agnostic (uses plain floats/dicts).
 
 import numpy as np
 
-from .config import MAX_GRAD
+from .config import MAX_GRAD, VF_COEF, ENT_COEF
 
 
 def compute_explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
@@ -63,8 +63,8 @@ def print_diagnostics(update: int, rollout_diag: dict, update_diag: dict):
     lines.append("")
     lines.append("  [LOSS COMPONENTS]")
     lines.append(f"    policy_loss    : {ud.get('policy_loss', 0.0):>12.6f}")
-    lines.append(f"    value_loss     : {ud.get('value_loss', 0.0):>12.6f}  (xVF_COEF=0.5 -> {ud.get('value_loss', 0.0)*0.5:>12.6f})")
-    lines.append(f"    entropy_bonus  : {ud.get('entropy', 0.0):>12.6f}  (xENT_COEF=0.01 -> {ud.get('entropy', 0.0)*0.01:>12.6f})")
+    lines.append(f"    value_loss     : {ud.get('value_loss', 0.0):>12.6f}  (xVF_COEF={VF_COEF} -> {ud.get('value_loss', 0.0)*VF_COEF:>12.6f})")
+    lines.append(f"    entropy_bonus  : {ud.get('entropy', 0.0):>12.6f}  (xENT_COEF={ENT_COEF} -> {ud.get('entropy', 0.0)*ENT_COEF:>12.6f})")
     lines.append(f"    total_loss     : {ud.get('total_loss', 0.0):>12.6f}")
 
     # ── 5. Gradient Health ───────────────────────────────────────────

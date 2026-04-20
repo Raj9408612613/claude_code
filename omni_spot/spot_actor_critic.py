@@ -43,7 +43,7 @@ class DepthCNNEncoder(nn.Module):
         self.conv1 = nn.Conv2d(N_CAMS, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        # Compute flattened size: input (5, 120, 160)
+        # Compute flattened size: input (N_CAMS=3, 120, 160)
         # After conv1: (32, 29, 39)  [(120-8)/4+1=29, (160-8)/4+1=39]
         # After conv2: (64, 13, 18)  [(29-4)/2+1=13, (39-4)/2+1=18]
         # After conv3: (64, 11, 16)  [(13-3)/1+1=11, (18-3)/1+1=16]
@@ -130,7 +130,7 @@ class SpotActorCritic(nn.Module):
             log_std:     (12,) clamped to [LOG_STD_MIN, LOG_STD_MAX]
             value:       (B,)
         """
-        cnn_feat = self.cnn(depth)
+        cnn_feat = self.cnn(depth / 10.0)  # same normalization as inference_step
         return self.head_forward(cnn_feat, proprio)
 
     def encode_depth(self, depth: torch.Tensor) -> torch.Tensor:
@@ -156,8 +156,11 @@ class SpotActorCritic(nn.Module):
 
         std = torch.exp(log_std)
         noise = torch.randn_like(action_mean)
-        action = torch.clamp(action_mean + std * noise, -1.0, 1.0)
-        log_prob = gaussian_log_prob(action_mean, log_std, action)
+        raw_action = action_mean + std * noise
+        action = torch.clamp(raw_action, -1.0, 1.0)
+        # Compute log_prob on the pre-clamp sample so the importance ratio
+        # exp(log_prob_new - log_prob_old) is unbiased near the action bounds.
+        log_prob = gaussian_log_prob(action_mean, log_std, raw_action)
         return action, log_prob, value, cnn_feat
 
     def head_forward(

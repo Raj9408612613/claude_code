@@ -180,6 +180,7 @@ if HAS_ISAAC:
                 goal_world_xy - robot_world_xy, dim=-1
             )
             self._prev_action[env_ids] = 0.0
+            self._prev_prev_action[env_ids] = 0.0
             self._step_count[env_ids] = 0
 
             # ── Obstacles: world-space, flat terrain only ────────────
@@ -302,7 +303,9 @@ if HAS_ISAAC:
             )
             # Denormalize to joint position targets; cache for _apply_action
             self._ctrl = self._action_center + actions * self._joint_range
-            self._prev_action = self._ctrl
+            # Store normalized action (not the denormalized joint target) so the
+            # smoothness reward compares apples-to-apples in [-1,1] space.
+            self._prev_action = actions.clone()
 
             # Humanoid patrol runs once per control step (if ever re-enabled).
             if HUMANOID_OBSTACLE["enabled"]:
@@ -374,9 +377,7 @@ if HAS_ISAAC:
             root_pos  = robot.data.root_pos_w
             root_quat = robot.data.root_quat_w
 
-            terminated = check_termination(
-                root_pos, root_quat, self._goal_pos, self._step_count
-            )
+            terminated = check_termination(root_pos, root_quat, self._goal_pos)
 
             # Truncation: timeout handled inside check_termination,
             # but Isaac Lab wants it separate
