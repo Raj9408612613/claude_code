@@ -309,7 +309,8 @@ if HAS_ISAAC:
             root_pos  = robot.data.root_pos_w
             root_quat = robot.data.root_quat_w
             joint_vel = robot.data.joint_vel
-            root_lin_vel = self._robot.data.root_lin_vel_w
+            robot = self.scene["robot"]
+            root_lin_vel = robot.data.root_lin_vel_w
 
             # Update humanoid position in obstacle array
             # Humanoid is disabled; keep its _obs_pos slot far off-scene so
