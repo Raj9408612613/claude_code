@@ -332,12 +332,12 @@ if HAS_ISAAC:
                 goal_pos       = self._goal_pos,
                 prev_robot_pos = self._prev_root_pos,
                 joint_vel      = joint_vel,
+                root_lin_vel   = root_lin_vel,
                 action         = self._prev_action,
                 prev_action    = self._prev_prev_action,
                 min_obs_dist   = min_obs_dist,
                 has_collision  = has_collision,
-                prev_dist_goal = self._prev_dist,
-                root_lin_vel=root_lin_vel,   
+                prev_dist_goal = self._prev_dist,    
             )
 
             # Forward reward components to self.extras so ppo.py can read them
