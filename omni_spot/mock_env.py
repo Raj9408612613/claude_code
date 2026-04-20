@@ -210,7 +210,7 @@ class MockSpotEnv:
         dists = torch.linalg.norm(obs_xy - robot_xy.unsqueeze(1), dim=-1)
         min_obs_dist = dists.min(dim=-1).values
         has_collision = min_obs_dist < 0.35
-        root_lin_vel = (self._root_pos - prev_root_pos) / 0.02
+        root_lin_vel = torch.zeros((self.num_envs, 3), device=self.device)
 
         reward, self._reward_info, new_dist = compute_reward(
             robot_pos=self._root_pos,
