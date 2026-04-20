@@ -38,6 +38,9 @@ ENERGY_W         =  -0.005
 SMOOTH_W         =  -0.002
 ALIVE_BONUS      =     0.5
 HEADING_W        =     0.3
+# Velocity tracking toward goal
+VEL_TRACK_W = 1.0    # reward per (m/s) of goal-directed velocity
+VEL_TRACK_CAP = 1.5  # m/s — saturation speed, reward doesn't grow beyond this
 
 # ── Robot physical properties (real Boston Dynamics Spot) ────────────────────
 SPOT_MASS         = 32.7                    # kg (BD datasheet)
