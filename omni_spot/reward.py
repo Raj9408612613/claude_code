@@ -112,7 +112,6 @@ def compute_reward(
         "r_heading":   r_heading,
         "dist_goal":   dist_goal,
         "r_vel_track": r_vel_track,
-}
     }
     return total, info, dist_goal
 
