@@ -11,6 +11,9 @@ Architecture (identical to JAX version):
                               |
                     Policy head -> 12 actions (mean, log_std)
                     Value  head -> 1 scalar
+
+all the above is now changed to run on the isaac sim and rl-games(isaac gym environment). 
+instead of importing JAX we now import torch.
 """
 
 import math
