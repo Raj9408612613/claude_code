@@ -120,6 +120,78 @@ if HAS_ISAAC:
 
 
     # ════════════════════════════════════════════════════════════════════════
+    # OBSTACLE CONFIG FACTORY
+    # ════════════════════════════════════════════════════════════════════════
+    # Built at module-import time so that the resulting RigidObjectCfg values
+    # can be assigned as proper class-level fields of SpotSceneCfg below.
+    # (Attaching them via setattr() AFTER @configclass ran leaves them invisible
+    # to InteractiveScene's asset registry — obstacles would never spawn.)
+    def _build_obstacle_cfgs():
+        """Generate RigidObjectCfg for each obstacle slot."""
+        cfgs = {}
+        for i in range(N_STATIC):
+            hs = OBS_HALF_SIZES[i]
+            cfgs[f"obs_static_{i:02d}"] = RigidObjectCfg(
+                prim_path=f"{{ENV_REGEX_NS}}/obs_static_{i:02d}",
+                spawn=sim_utils.CuboidCfg(
+                    size=(hs[0] * 2, hs[1] * 2, hs[2] * 2),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        kinematic_enabled=True,
+                    ),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.8, 0.4, 0.2),
+                    ),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(100.0, 0.0, hs[2]),
+                ),
+            )
+        for i in range(N_DYNAMIC):
+            idx = N_STATIC + i
+            hs = OBS_HALF_SIZES[idx]
+            cfgs[f"obs_dynamic_{i:02d}"] = RigidObjectCfg(
+                prim_path=f"{{ENV_REGEX_NS}}/obs_dynamic_{i:02d}",
+                spawn=sim_utils.CylinderCfg(
+                    radius=hs[0],
+                    height=hs[2] * 2,
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        kinematic_enabled=True,
+                    ),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.2, 0.6, 0.8),
+                    ),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(100.0, 0.0, hs[2]),
+                ),
+            )
+        # Humanoid (approximated as a tall capsule)
+        hs = OBS_HALF_SIZES[N_STATIC + N_DYNAMIC]
+        cfgs["obs_humanoid"] = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/obs_humanoid",
+            spawn=sim_utils.CapsuleCfg(
+                radius=hs[0],
+                height=hs[2] * 2 - hs[0] * 2,  # capsule height excludes end caps
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    kinematic_enabled=True,
+                ),
+                collision_props=sim_utils.CollisionPropertiesCfg(),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.9, 0.3, 0.3),
+                ),
+            ),
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(100.0, 0.0, HUMANOID_OBSTACLE["mocap_z"]),
+            ),
+        )
+        return cfgs
+
+    _OBS_CFGS = _build_obstacle_cfgs()
+
+
+    # ════════════════════════════════════════════════════════════════════════
     # SCENE CONFIG
     # ════════════════════════════════════════════════════════════════════════
 
@@ -281,74 +353,13 @@ if HAS_ISAAC:
         # Kinematic bodies — positions written each reset from SpotNavEnv._obs_pos.
         # Only placed on flat terrain patches (row ≤ FLAT_TERRAIN_ROW_MAX).
         # Spawned far off-scene initially; moved on reset for flat-terrain envs.
-    # Build obstacle configs programmatically from OBS_HALF_SIZES
-    def _build_obstacle_cfgs():
-        """Generate RigidObjectCfg for each obstacle."""
-        cfgs = {}
-        for i in range(N_STATIC):
-            hs = OBS_HALF_SIZES[i]
-            cfgs[f"obs_static_{i:02d}"] = RigidObjectCfg(
-                prim_path=f"{{ENV_REGEX_NS}}/obs_static_{i:02d}",
-                spawn=sim_utils.CuboidCfg(
-                    size=(hs[0] * 2, hs[1] * 2, hs[2] * 2),
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        kinematic_enabled=True,
-                    ),
-                    collision_props=sim_utils.CollisionPropertiesCfg(),
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.8, 0.4, 0.2),
-                    ),
-                ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=(100.0, 0.0, hs[2]),
-                ),
-            )
-        for i in range(N_DYNAMIC):
-            idx = N_STATIC + i
-            hs = OBS_HALF_SIZES[idx]
-            cfgs[f"obs_dynamic_{i:02d}"] = RigidObjectCfg(
-                prim_path=f"{{ENV_REGEX_NS}}/obs_dynamic_{i:02d}",
-                spawn=sim_utils.CylinderCfg(
-                    radius=hs[0],
-                    height=hs[2] * 2,
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        kinematic_enabled=True,
-                    ),
-                    collision_props=sim_utils.CollisionPropertiesCfg(),
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.2, 0.6, 0.8),
-                    ),
-                ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=(100.0, 0.0, hs[2]),
-                ),
-            )
-        # Humanoid (approximated as a tall capsule/box)
-        hs = OBS_HALF_SIZES[N_STATIC + N_DYNAMIC]
-        cfgs["obs_humanoid"] = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/obs_humanoid",
-            spawn=sim_utils.CapsuleCfg(
-                radius=hs[0],
-                height=hs[2] * 2 - hs[0] * 2,  # capsule height excludes end caps
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    kinematic_enabled=True,
-                ),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.9, 0.3, 0.3),
-                ),
-            ),
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(100.0, 0.0, HUMANOID_OBSTACLE["mocap_z"]),
-            ),
-        )
-        return cfgs
-    # Attach obstacle configs to scene class
-    _obs_cfgs = _build_obstacle_cfgs()
-    for _name, _cfg in _obs_cfgs.items():
-        setattr(SpotSceneCfg, _name, _cfg)
-    # Note: no ContactSensorCfg — collision detection uses distance-based
-    # math in SpotNavEnv._get_rewards() (min_obs_dist < 0.35), not sensor data.
+        # These are assigned inside the class body (NOT via setattr after
+        # decoration) so InteractiveScene sees them as real scene assets.
+        obs_static_00 = _OBS_CFGS["obs_static_00"]
+        obs_static_01 = _OBS_CFGS["obs_static_01"]
+        obs_humanoid  = _OBS_CFGS["obs_humanoid"]
+        # Note: no ContactSensorCfg — collision detection uses distance-based
+        # math in SpotNavEnv._get_rewards() (min_obs_dist < 0.35), not sensor data.
     # ════════════════════════════════════════════════════════════════════════
     # ENVIRONMENT CONFIG
     # ════════════════════════════════════════════════════════════════════════

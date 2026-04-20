@@ -11,6 +11,7 @@ from .config import (
     GOAL_BONUS, GOAL_TOL, PROGRESS_W, COLLISION_PEN,
     NEAR_COLL_PEN, NEAR_COLL_THRESH, UPRIGHT_W, HEIGHT_W,
     TARGET_HEIGHT, ENERGY_W, SMOOTH_W, ALIVE_BONUS, HEADING_W,
+    VEL_TRACK_W, VEL_TRACK_CAP,
 )
 
 
@@ -18,7 +19,6 @@ def compute_reward(
     robot_pos:       torch.Tensor,   # (B, 3)
     robot_quat:      torch.Tensor,   # (B, 4)  w, x, y, z
     goal_pos:        torch.Tensor,   # (B, 2)
-    prev_robot_pos:  torch.Tensor,   # (B, 3)
     root_lin_vel:    torch.Tensor,   # (B, 3)
     joint_vel:       torch.Tensor,   # (B, 12)
     action:          torch.Tensor,   # (B, 12)
@@ -110,9 +110,8 @@ def compute_reward(
         "r_smooth":    r_smooth,
         "r_alive":     r_alive,
         "r_heading":   r_heading,
-        "dist_goal":   dist_goal,
         "r_vel_track": r_vel_track,
-}
+        "dist_goal":   dist_goal,
     }
     return total, info, dist_goal
 

@@ -48,7 +48,7 @@ if HAS_ISAAC:
         Batched Spot navigation environment for Isaac Lab.
 
         Observations:
-            depth:  (num_envs, 5, 120, 160) from RTX cameras
+            depth:  (num_envs, N_CAMS=3, 120, 160) from RTX cameras
             proprio: (num_envs, 37) proprioception
 
         Actions:
@@ -116,6 +116,10 @@ if HAS_ISAAC:
             # Default obstacle z-heights for resetting off-scene obstacles
             self._obs_default_z = torch.tensor(
                 [hs[2] for hs in OBS_HALF_SIZES], device=self.device
+            )
+            # Sentinel position for disabled / non-flat-terrain obstacles.
+            self._off_scene = torch.tensor(
+                [1000.0, 0.0, 0.5], device=self.device
             )
 
             # Cached joint targets (set in _pre_physics_step, applied in _apply_action)
@@ -199,17 +203,18 @@ if HAS_ISAAC:
             )
 
             # Send obstacles off-scene on non-flat terrain
-            OFF_SCENE = torch.tensor([1000.0, 0.0, 0.5], device=self.device)
             is_flat_3 = is_flat.unsqueeze(-1).expand(-1, 3)     # broadcast to (n,3)
             for i in range(N_STATIC + N_DYNAMIC):
-                obs_pos_new[:, i] = torch.where(is_flat_3, obs_pos_new[:, i], OFF_SCENE)
+                obs_pos_new[:, i] = torch.where(
+                    is_flat_3, obs_pos_new[:, i], self._off_scene
+                )
 
             # Humanoid slot is always off-scene (disabled in terrain curriculum)
             if N_HUMANOID > 0:
-                obs_pos_new[:, HUMANOID_MOCAP_IDX] = OFF_SCENE
+                obs_pos_new[:, HUMANOID_MOCAP_IDX] = self._off_scene
 
             self._obs_pos[env_ids] = obs_pos_new
-            self._human_pos[env_ids] = OFF_SCENE[:2]
+            self._human_pos[env_ids] = self._off_scene[:2]
             self._human_wp_idx[env_ids] = 0
 
             self._write_obstacle_poses_to_sim(env_ids)
@@ -252,7 +257,7 @@ if HAS_ISAAC:
                 d = torch.clamp(d, MIN_DEPTH, MAX_DEPTH)
                 depth_list.append(d)
 
-            depth = torch.cat(depth_list, dim=1)  # (num_envs, 5, H, W)
+            depth = torch.cat(depth_list, dim=1)  # (num_envs, N_CAMS, H, W)
 
             # ── Proprioception (37-dim) ──────────────────────────────
             root_pos  = robot.data.root_pos_w           # (B, 3)
@@ -299,6 +304,11 @@ if HAS_ISAAC:
             self._ctrl = self._action_center + actions * self._joint_range
             self._prev_action = self._ctrl
 
+            # Humanoid patrol runs once per control step (if ever re-enabled).
+            if HUMANOID_OBSTACLE["enabled"]:
+                self._update_humanoid_patrol()
+                self._sync_humanoid_to_sim()
+
         def _apply_action(self):
             """Write cached joint targets to the simulation (called each physics substep)."""
             self.scene["robot"].set_joint_position_target(self._ctrl)
@@ -306,16 +316,15 @@ if HAS_ISAAC:
         # ── Rewards ──────────────────────────────────────────────────
         def _get_rewards(self) -> torch.Tensor:
             robot = self.scene["robot"]
-            root_pos  = robot.data.root_pos_w
-            root_quat = robot.data.root_quat_w
-            joint_vel = robot.data.joint_vel
-            root_lin_vel = self._robot.data.root_lin_vel_w
+            root_pos     = robot.data.root_pos_w
+            root_quat    = robot.data.root_quat_w
+            joint_vel    = robot.data.joint_vel
+            root_lin_vel = robot.data.root_lin_vel_w
 
-            # Update humanoid position in obstacle array
             # Humanoid is disabled; keep its _obs_pos slot far off-scene so
             # it doesn't affect the distance computation.
             if N_HUMANOID > 0:
-                self._obs_pos[:, HUMANOID_MOCAP_IDX] = 1000.0
+                self._obs_pos[:, HUMANOID_MOCAP_IDX] = self._off_scene
 
             # Compute min obstacle distance (same math as MJX version)
             robot_xy = root_pos[:, :2]                                         # (B, 2)
@@ -330,14 +339,13 @@ if HAS_ISAAC:
                 robot_pos      = root_pos,
                 robot_quat     = root_quat,
                 goal_pos       = self._goal_pos,
-                prev_robot_pos = self._prev_root_pos,
-                joint_vel      = joint_vel,
                 root_lin_vel   = root_lin_vel,
+                joint_vel      = joint_vel,
                 action         = self._prev_action,
                 prev_action    = self._prev_prev_action,
                 min_obs_dist   = min_obs_dist,
                 has_collision  = has_collision,
-                prev_dist_goal = self._prev_dist,    
+                prev_dist_goal = self._prev_dist,
             )
 
             # Forward reward components to self.extras so ppo.py can read them
@@ -347,7 +355,11 @@ if HAS_ISAAC:
                 if isinstance(v, torch.Tensor):
                     self.extras[k] = v
 
+            # Cache state for next step's smoothness / progress computations.
+            # DirectRLEnv does not call _post_physics_step, so update here.
             self._prev_dist = new_dist
+            self._prev_prev_action = self._prev_action.clone()
+            self._prev_root_pos = root_pos.clone()
             self._step_count += 1
             return reward
 
@@ -374,17 +386,6 @@ if HAS_ISAAC:
             terminated = terminated & ~truncated
 
             return terminated, truncated
-
-        def _post_physics_step(self):
-            """Cache previous state for reward computation."""
-            robot = self.scene["robot"]
-            self._prev_root_pos = robot.data.root_pos_w.clone()
-            self._prev_prev_action = self._prev_action.clone()
-
-            # Update humanoid patrol and sync its rigid body to PhysX
-            if HUMANOID_OBSTACLE["enabled"]:
-                self._update_humanoid_patrol()
-                self._sync_humanoid_to_sim()
 
         def _update_humanoid_patrol(self):
             """Move humanoid obstacle along patrol path near goal."""

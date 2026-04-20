@@ -80,7 +80,6 @@ class MockSpotEnv:
         self._prev_prev_action = torch.zeros(num_envs, ACTION_DIM, device=self.device)
         self._prev_root_pos = torch.zeros(num_envs, 3, device=self.device)
         self._step_count = torch.zeros(num_envs, device=self.device, dtype=torch.int32)
-        self._root_lin_vel = torch.zeros(B, 3)
         self._obs_pos = torch.zeros(num_envs, N_OBS, 3, device=self.device)
         self._human_pos = torch.zeros(num_envs, 2, device=self.device)
         self._human_wp_idx = torch.zeros(num_envs, device=self.device, dtype=torch.int32)
@@ -215,9 +214,8 @@ class MockSpotEnv:
             robot_pos=self._root_pos,
             robot_quat=self._root_quat,
             goal_pos=self._goal_pos,
-            prev_robot_pos=self._prev_root_pos,
+            root_lin_vel=self._root_linvel,
             joint_vel=self._joint_vel,
-            root_lin_vel=root_lin_vel,
             action=self._prev_action,
             prev_action=self._prev_prev_action,
             min_obs_dist=min_obs_dist,
