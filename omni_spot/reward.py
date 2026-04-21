@@ -16,16 +16,17 @@ from .config import (
 
 
 def compute_reward(
-    robot_pos:       torch.Tensor,   # (B, 3)
-    robot_quat:      torch.Tensor,   # (B, 4)  w, x, y, z
-    goal_pos:        torch.Tensor,   # (B, 2)
-    root_lin_vel:    torch.Tensor,   # (B, 3)
-    joint_vel:       torch.Tensor,   # (B, 12)
-    action:          torch.Tensor,   # (B, 12)
-    prev_action:     torch.Tensor,   # (B, 12)
-    min_obs_dist:    torch.Tensor,   # (B,)
-    has_collision:   torch.Tensor,   # (B,) bool
-    prev_dist_goal:  torch.Tensor,   # (B,)
+    robot_pos:       torch.Tensor,          # (B, 3)
+    robot_quat:      torch.Tensor,          # (B, 4)  w, x, y, z
+    goal_pos:        torch.Tensor,          # (B, 2)
+    root_lin_vel:    torch.Tensor,          # (B, 3)
+    joint_vel:       torch.Tensor,          # (B, 12)
+    action:          torch.Tensor,          # (B, 12)
+    prev_action:     torch.Tensor,          # (B, 12)
+    min_obs_dist:    torch.Tensor,          # (B,)
+    has_collision:   torch.Tensor,          # (B,) bool
+    prev_dist_goal:  torch.Tensor,          # (B,)
+    terrain_z:       torch.Tensor | None = None,  # (B,) terrain patch origin z
 ) -> tuple[torch.Tensor, dict, torch.Tensor]:
     """
     Fully batched reward computation.
@@ -57,8 +58,12 @@ def compute_reward(
     tilt_rad = torch.arccos(torch.clamp(cos_tilt, -1.0, 1.0))
     r_upright = tilt_rad * UPRIGHT_W
 
-    # ── 5. Height deviation ─────────────────────────────────────────────
-    height_dev = torch.abs(robot_pos[:, 2] - TARGET_HEIGHT)
+    # ── 5. Height deviation — terrain-relative ──────────────────────────
+    # In Isaac Lab, robots spawn at env_origin_z + TARGET_HEIGHT. Measuring
+    # deviation from bare TARGET_HEIGHT (world z=0.46) creates a constant
+    # offset equal to env_origin_z that the robot can never reduce.
+    target_z = (terrain_z + TARGET_HEIGHT) if terrain_z is not None else TARGET_HEIGHT
+    height_dev = torch.abs(robot_pos[:, 2] - target_z)
     r_height = height_dev * HEIGHT_W
 
     # ── 6. Energy (joint velocity magnitude) ────────────────────────────
@@ -117,21 +122,25 @@ def compute_reward(
 
 
 def check_termination(
-    robot_pos:   torch.Tensor,   # (B, 3)
-    robot_quat:  torch.Tensor,   # (B, 4)
-    goal_pos:    torch.Tensor,   # (B, 2)
+    robot_pos:   torch.Tensor,          # (B, 3)
+    robot_quat:  torch.Tensor,          # (B, 4)
+    goal_pos:    torch.Tensor,          # (B, 2)
     min_height:  float = 0.2,
-    max_tilt:    float = 1.0472,   # pi/3
+    max_tilt:    float = 1.0472,        # pi/3
+    terrain_z:   torch.Tensor | None = None,  # (B,) terrain patch origin z
 ) -> torch.Tensor:
     """
     Returns terminated (B,) bool — TRUE termination only (fallen or goal reached).
-    Timeout (step_count >= max_steps) is a TRUNCATION, not termination; the caller
-    handles it separately so GAE can bootstrap from V(s') instead of zeroing it.
+    Timeout is TRUNCATION; the caller handles it separately so GAE can bootstrap.
+
+    min_height is relative to terrain: fallen when robot_z < terrain_z + min_height.
+    Pass terrain_z=None for mock env (robot starts directly at TARGET_HEIGHT).
     """
     w, x, y, z = robot_quat[:, 0], robot_quat[:, 1], robot_quat[:, 2], robot_quat[:, 3]
     cos_tilt = 1.0 - 2.0 * (x ** 2 + y ** 2)
     tilt = torch.arccos(torch.clamp(cos_tilt, -1.0, 1.0))
 
-    fallen  = (robot_pos[:, 2] < min_height) | (tilt > max_tilt)
+    min_height_world = (terrain_z + min_height) if terrain_z is not None else min_height
+    fallen  = (robot_pos[:, 2] < min_height_world) | (tilt > max_tilt)
     at_goal = torch.linalg.norm(goal_pos - robot_pos[:, :2], dim=-1) < GOAL_TOL
     return fallen | at_goal

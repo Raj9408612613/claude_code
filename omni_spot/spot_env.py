@@ -338,6 +338,7 @@ if HAS_ISAAC:
             min_obs_dist = dists.min(dim=-1).values                            # (B,)
             has_collision = min_obs_dist < 0.35
 
+            terrain_z = self.scene.env_origins[:, 2]
             reward, self._reward_info, new_dist = compute_reward(
                 robot_pos      = root_pos,
                 robot_quat     = root_quat,
@@ -349,6 +350,7 @@ if HAS_ISAAC:
                 min_obs_dist   = min_obs_dist,
                 has_collision  = has_collision,
                 prev_dist_goal = self._prev_dist,
+                terrain_z      = terrain_z,
             )
 
             # Forward reward components to self.extras so ppo.py can read them
@@ -377,7 +379,9 @@ if HAS_ISAAC:
             root_pos  = robot.data.root_pos_w
             root_quat = robot.data.root_quat_w
 
-            terminated = check_termination(root_pos, root_quat, self._goal_pos)
+            terrain_z  = self.scene.env_origins[:, 2]
+            terminated = check_termination(root_pos, root_quat, self._goal_pos,
+                                           terrain_z=terrain_z)
 
             # Truncation: timeout handled inside check_termination,
             # but Isaac Lab wants it separate
