@@ -28,22 +28,24 @@ class RolloutBatch:
     """Stores flattened rollout experience (T*B, ...).
 
     Mirrors the JAX RolloutBatch NamedTuple.
+    depth is stored fp16 on pinned CPU RAM; all other tensors live on GPU.
+    CPU indexing is handled transparently in __getitem__.
     """
     __slots__ = [
-        "cnn_feat", "proprio", "action", "log_prob",
+        "depth", "proprio", "action", "log_prob",
         "advantage", "ret",
     ]
 
     def __init__(
         self,
-        cnn_feat:  torch.Tensor,   # (T*B, 256)
+        depth:     torch.Tensor,   # (T*B, N_CAMS, H, W)  fp16 cpu pinned
         proprio:   torch.Tensor,   # (T*B, 37)
         action:    torch.Tensor,   # (T*B, 12)
         log_prob:  torch.Tensor,   # (T*B,)
         advantage: torch.Tensor,   # (T*B,)
         ret:       torch.Tensor,   # (T*B,) normalized return
     ):
-        self.cnn_feat  = cnn_feat
+        self.depth     = depth
         self.proprio   = proprio
         self.action    = action
         self.log_prob  = log_prob
@@ -51,8 +53,10 @@ class RolloutBatch:
         self.ret       = ret
 
     def __getitem__(self, idx):
+        # depth lives on CPU; idx from torch.randperm is on GPU — cpu() it first.
+        cpu_idx = idx.cpu() if isinstance(idx, torch.Tensor) and idx.is_cuda else idx
         return RolloutBatch(
-            cnn_feat  = self.cnn_feat[idx],
+            depth     = self.depth[cpu_idx],
             proprio   = self.proprio[idx],
             action    = self.action[idx],
             log_prob  = self.log_prob[idx],
@@ -147,15 +151,24 @@ class PPOTrainer:
         """
         Collect n_steps of experience.
 
-        Stores CNN features (T*B, 256) instead of raw depth to keep
-        rollout buffer at ~1 GB instead of ~374 GB.
+        Stores raw depth fp16 on pinned CPU RAM so the CNN encoder
+        receives gradient updates during each PPO minibatch step.
+        Peak VRAM cost per minibatch is ~60 MB (fp32 on GPU); total
+        CPU RAM cost is n_steps × n_envs × frame_bytes (fp16).
 
         Returns:
             obs:           updated observation dict
             batch:         RolloutBatch
             rollout_stats: dict with reward/episode metrics
         """
-        buf_cnn_feat    = []
+        # Pre-allocate pinned CPU buffer: (T, B, N_CAMS, H, W) fp16.
+        # Pinned memory enables async DMA during PPO update minibatch transfers.
+        depth_buf = torch.zeros(
+            self.n_steps, *obs["depth"].shape,
+            dtype=torch.float16,
+        )
+        if torch.cuda.is_available():
+            depth_buf = depth_buf.pin_memory()
         buf_proprio     = []
         buf_actions     = []
         buf_log_prob    = []
@@ -170,23 +183,20 @@ class PPOTrainer:
         t_inference = 0.0
         t_env_step  = 0.0
 
-        for _ in range(self.n_steps):
+        for step_idx in range(self.n_steps):
             if profile:
                 torch.cuda.synchronize()
                 t0 = time.time()
 
-            action, log_prob, value, cnn_feat = self.sample_action(obs)
+            action, log_prob, value, _ = self.sample_action(obs)
 
             if profile:
                 torch.cuda.synchronize()
                 t_inference += time.time() - t0
                 t0 = time.time()
 
-            # Sanitize features
-            cnn_feat = torch.where(
-                torch.isfinite(cnn_feat), cnn_feat, torch.zeros_like(cnn_feat)
-            )
-            buf_cnn_feat.append(cnn_feat)
+            # Store raw depth (fp16, CPU) — CNN runs during update with grad.
+            depth_buf[step_idx] = obs["depth"].half().cpu()
             buf_proprio.append(obs["proprio"])
             buf_actions.append(action)
             buf_log_prob.append(log_prob)
@@ -280,11 +290,17 @@ class PPOTrainer:
         adv_std  = adv_flat.std() + 1e-8
         adv_norm = (adv_flat - adv_mean) / adv_std
 
-        stacked_cnn_feat = torch.stack(buf_cnn_feat)
         stacked_proprio  = torch.stack(buf_proprio)
 
+        # CNN feature diagnostics: small no_grad forward on last obs sample.
+        # Tells us whether encoder weights are producing non-trivial features.
+        with torch.no_grad():
+            _d = obs["depth"][:min(256, self.n_envs)].float() / 10.0
+            _f = self.net.cnn(_d)
+        _f_finite = torch.isfinite(_f)
+
         batch = RolloutBatch(
-            cnn_feat  = flat(stacked_cnn_feat),
+            depth     = flat(depth_buf),
             proprio   = flat(stacked_proprio),
             action    = flat(torch.stack(buf_actions)),
             log_prob  = flat(torch.stack(buf_log_prob)),
@@ -329,9 +345,9 @@ class PPOTrainer:
             "proprio_mean":      float(stacked_proprio.mean()),
             "proprio_std":       float(stacked_proprio.std()),
             "proprio_nan_frac":  float((~torch.isfinite(stacked_proprio)).float().mean()),
-            "cnn_feat_mean":     float(stacked_cnn_feat.mean()),
-            "cnn_feat_std":      float(stacked_cnn_feat.std()),
-            "cnn_feat_nan_frac": float((~torch.isfinite(stacked_cnn_feat)).float().mean()),
+            "cnn_feat_mean":     float(_f.mean()),
+            "cnn_feat_std":      float(_f.std()),
+            "cnn_feat_nan_frac": float((~_f_finite).float().mean()),
         }
 
         if reward_sums is not None and reward_count > 0:
@@ -353,9 +369,9 @@ class PPOTrainer:
         """One gradient update on a minibatch with full NaN/explosion safeguards."""
         self.net.train()
 
-        mean, log_std, value = self.net.head_forward(
-            batch.cnn_feat, batch.proprio
-        )
+        # Move fp16 CPU depth to GPU fp32 — pinned memory makes this an async DMA.
+        depth_gpu = batch.depth.to(self.device, dtype=torch.float32, non_blocking=True)
+        mean, log_std, value = self.net(depth_gpu, batch.proprio)
 
         # ── Policy loss with ratio clamping ──────────────────────────
         log_prob_new = gaussian_log_prob(mean, log_std, batch.action)
@@ -480,7 +496,7 @@ class PPOTrainer:
         on a single noisy minibatch and avoids missing a steady drift that the
         old "check the very last minibatch only" logic would happily ignore.
         """
-        total_samples = batch.cnn_feat.shape[0]
+        total_samples = batch.depth.shape[0]
 
         running_kl    = None   # EMA KL (α=0.3) — recent minibatches weighted higher
         skipped_total = 0
