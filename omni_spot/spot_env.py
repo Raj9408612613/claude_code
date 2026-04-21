@@ -365,7 +365,6 @@ if HAS_ISAAC:
             self._prev_dist = new_dist
             self._prev_prev_action = self._prev_action.clone()
             self._prev_root_pos = root_pos.clone()
-            self._step_count += 1
             return reward
 
         # ── Info (reward components for diagnostics) ─────────────────
@@ -383,13 +382,17 @@ if HAS_ISAAC:
             terminated = check_termination(root_pos, root_quat, self._goal_pos,
                                            terrain_z=terrain_z)
 
-            # Truncation: timeout handled inside check_termination,
-            # but Isaac Lab wants it separate
+            # Increment step counter here (not in _get_rewards) so it's only
+            # touched once per lifecycle step regardless of how many times
+            # _get_rewards is called.
+            self._step_count += 1
             truncated = self._step_count >= 1000
 
-            # Remove timeout from terminated (it's a truncation, not failure)
-            terminated = terminated & ~truncated
-
+            # Do NOT mask terminated by ~truncated: if a robot falls at step 1000
+            # it is a true termination — GAE should zero V(s'), not bootstrap from
+            # the reset state. Both flags can be True simultaneously; the GAE code
+            # handles them with separate masks (mask_bootstrap uses terminated,
+            # mask_gae uses terminated | truncated).
             return terminated, truncated
 
         def _update_humanoid_patrol(self):
