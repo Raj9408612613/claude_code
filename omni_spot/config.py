@@ -33,7 +33,7 @@ NEAR_COLL_PEN    =    -2.0
 NEAR_COLL_THRESH =    0.35   # metres
 UPRIGHT_W        =    -2.0
 HEIGHT_W         =    -3.0
-TARGET_HEIGHT    =    0.46   # real Spot standing height (m)
+TARGET_HEIGHT    =    0.61   # real Spot standing height (m)
 ENERGY_W         =  -0.001
 SMOOTH_W         =  -0.002
 ALIVE_BONUS      =     1.0
@@ -44,7 +44,7 @@ VEL_TRACK_CAP = 1.5  # m/s — saturation speed, reward doesn't grow beyond this
 
 # ── Robot physical properties (real Boston Dynamics Spot) ────────────────────
 SPOT_MASS         = 32.7                    # kg (BD datasheet)
-SPOT_BODY_DIMS    = [1.1, 0.5, 0.191]      # L×W×H in metres (1100×500×191 mm)
+SPOT_BODY_DIMS    = [1.1, 0.5, 0.610]      # L×W×H in metres (1100×500×610 mm)
 
 # ── Physics ──────────────────────────────────────────────────────────────────
 PHYSICS_DT        = 0.005    # PhysX sim timestep (200 Hz)
