@@ -76,7 +76,7 @@ JOINT_VEL_LIMITS = [
     4.0, 4.0, 6.0,   # hr
 ]
 
-STANDING_POSE = [0.0, 1.04, -1.8] * 4  # home keyframe (12 joints)
+STANDING_POSE = [0.0, 0.88, -1.7] * 4  # home keyframe (12 joints)
 
 # ── Terrain / room ───────────────────────────────────────────────────────────
 PATCH_SIZE = 8.0     # each terrain patch is 8 × 8 m
