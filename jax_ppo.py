@@ -20,6 +20,8 @@ PPO references match config.py TRAINING hyperparameters:
     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5
 """
 
+import time
+
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -36,7 +38,7 @@ ENT_COEF     = 0.01
 VF_COEF      = 0.5
 MAX_GRAD     = 0.5
 LR           = 3e-4
-N_EPOCHS     = 10
+N_EPOCHS     = 4
 MINIBATCH_SZ = 512
 CNN_FEAT_DIM = 256
 PROPRIO_DIM  = 37
@@ -99,6 +101,8 @@ class SpotActorCritic(nn.Module):
 
         # Actor head
         action_mean   = nn.Dense(ACTION_DIM, name="actor")(x)
+        # Clip action mean — actions are in [-1,1], so mean beyond ±2 is already extreme
+        action_mean   = jnp.clip(action_mean, -2.0, 2.0)
         log_std       = self.param("log_std",
                                    nn.initializers.zeros, (ACTION_DIM,))
         log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
@@ -138,6 +142,7 @@ def _inference_step(params, depth, proprio, rng_key):
     x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
     x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
     mean      = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
+    mean      = jnp.clip(mean, -2.0, 2.0)   # Must match _head_forward clip!
     log_std   = jnp.clip(params["log_std"], LOG_STD_MIN, LOG_STD_MAX)
     value     = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
     value     = nn.Dense(1).apply({"params": params["critic1"]}, value).squeeze(-1)
@@ -160,6 +165,8 @@ def _head_forward(params, cnn_feat, proprio):
     x = nn.Dense(256).apply({"params": params["trunk0"]}, x); x = nn.elu(x)
     x = nn.Dense(128).apply({"params": params["trunk1"]}, x); x = nn.elu(x)
     action_mean   = nn.Dense(ACTION_DIM).apply({"params": params["actor"]}, x)
+    # Clip action mean — actions are in [-1,1], so mean beyond ±2 is already extreme
+    action_mean   = jnp.clip(action_mean, -2.0, 2.0)
     log_std       = params["log_std"]
     log_std_clamp = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
     value = nn.Dense(64).apply({"params": params["critic0"]}, x); value = nn.elu(value)
@@ -237,12 +244,9 @@ def ppo_update(
         log_ratio    = jnp.clip(log_prob_new - batch.log_prob, -10.0, 10.0)
         ratio        = jnp.exp(log_ratio)
 
-        adv_mean = batch.advantage.mean()
-        adv_std  = batch.advantage.std() + 1e-8
-        adv_norm = (batch.advantage - adv_mean) / adv_std
-        # Clamp normalized advantages more aggressively to prevent outlier domination
-        # When advantages are poorly estimated, extreme values kill gradient flow
-        adv_norm = jnp.clip(adv_norm, -5.0, 5.0)
+        # Advantages are already globally normalized (mean=0, std=1) in
+        # collect_rollout.  Just clip outliers to prevent single-sample domination.
+        adv_norm = jnp.clip(batch.advantage, -5.0, 5.0)
 
         pg_loss1     = ratio * adv_norm
         pg_loss2     = jnp.clip(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * adv_norm
@@ -276,16 +280,58 @@ def ppo_update(
         # ── NaN guard: if total is bad, return zero loss (skip update) ─
         total = jnp.where(jnp.isfinite(total), total, 0.0)
 
+        # ── Diagnostic metrics ─────────────────────────────────────────
+        # Approximate KL divergence: E[(ratio - 1) - log(ratio)]
+        approx_kl = jnp.mean((ratio - 1.0) - log_ratio)
+        # Clip fraction: how often the ratio is outside [1-eps, 1+eps]
+        clip_frac = jnp.mean(
+            (ratio < (1.0 - CLIP_EPS)) | (ratio > (1.0 + CLIP_EPS))
+        )
+
         return total, {
-            "policy_loss": policy_loss,
-            "value_loss":  value_loss,
-            "entropy":     entropy,
-            "total_loss":  total,
-            "ratio_mean":  jnp.mean(ratio),
-            "ratio_max":   jnp.max(ratio),
+            "policy_loss":     policy_loss,
+            "value_loss":      value_loss,
+            "entropy":         entropy,
+            "total_loss":      total,
+            "ratio_mean":      jnp.mean(ratio),
+            "ratio_max":       jnp.max(ratio),
+            # Diagnostic extras
+            "approx_kl":       approx_kl,
+            "clip_frac":       clip_frac,
+            "log_std_values":  log_std,                    # (ACTION_DIM,)
+            "action_mean_abs": jnp.mean(jnp.abs(mean)),
+            "action_std_mean": jnp.mean(jnp.exp(log_std)),
+            "value_pred_mean": jnp.mean(value),
+            "value_pred_std":  jnp.std(value),
+            "value_pred_min":  jnp.min(value),
+            "value_pred_max":  jnp.max(value),
+            "adv_mb_mean":     jnp.mean(batch.advantage),
+            "adv_mb_std":      jnp.std(batch.advantage),
         }
 
     grads, info = jax.grad(loss_fn, has_aux=True)(train_state.params)
+
+    # ── Gradient diagnostics (before NaN cleanup) ──────────────────
+    # Compute per-module gradient norms and NaN fraction
+    flat_grads, _ = jax.tree_util.tree_flatten(grads)
+    all_elems = jnp.concatenate([g.ravel() for g in flat_grads])
+    grad_norm = jnp.sqrt(jnp.sum(all_elems ** 2))
+    grad_nan_frac = jnp.mean(~jnp.isfinite(all_elems))
+
+    info["grad_norm"] = grad_norm
+    info["grad_nan_frac"] = grad_nan_frac
+
+    # Per-module gradient norms
+    for module_name in ['cnn', 'proprio', 'trunk0', 'trunk1', 'actor', 'critic0', 'critic1']:
+        if module_name in grads:
+            module_grads = grads[module_name]
+            module_flat, _ = jax.tree_util.tree_flatten(module_grads)
+            module_elems = jnp.concatenate([g.ravel() for g in module_flat])
+            info[f"grad_norm_{module_name}"] = jnp.sqrt(jnp.sum(module_elems ** 2))
+
+    # log_std gradient norm (it's a top-level param, not a sub-module)
+    if "log_std" in grads:
+        info["grad_norm_log_std"] = jnp.sqrt(jnp.sum(grads["log_std"] ** 2))
 
     # NaN guard on gradients: replace any NaN/inf grad with 0
     grads = jax.tree_util.tree_map(
@@ -350,7 +396,7 @@ class PPOTrainer:
         )
 
     # ──────────────────────────────────────────────────────────────────
-    def collect_rollout(self, env, state, obs):
+    def collect_rollout(self, env, state, obs, profile=False):
         """
         Collect n_steps of experience. Returns updated state/obs, batch, and
         rollout stats dict (mean/min/max reward, done rate, episode count).
@@ -366,8 +412,25 @@ class PPOTrainer:
         buf_dones    = []
         buf_values   = []
 
+        # Running sums for reward components (avoids storing 2048 dicts)
+        reward_sums = None
+        reward_count = 0
+
+        # Optional per-component timing
+        t_inference = 0.0
+        t_env_step  = 0.0
+        t_auto_reset = 0.0
+
         for _ in range(self.n_steps):
+            if profile:
+                t0 = time.time()
+
             action, log_prob, value, cnn_feat = self._sample_action(obs)
+
+            if profile:
+                jax.block_until_ready(action)
+                t_inference += time.time() - t0
+                t0 = time.time()
 
             # Sanitize features: replace NaN/inf with 0 before storing
             cnn_feat = jnp.where(jnp.isfinite(cnn_feat), cnn_feat, 0.0)
@@ -377,23 +440,42 @@ class PPOTrainer:
             buf_log_prob.append(log_prob)
             buf_values.append(value)
 
-            state, obs, reward, done, _ = env.step(state, action)
+            state, obs, reward, done, step_info = env.step(state, action)
+
+            if profile:
+                jax.block_until_ready(reward)
+                t_env_step += time.time() - t0
+                t0 = time.time()
 
             buf_rewards.append(reward)
             buf_dones.append(done.astype(jnp.float32))
+
+            # Accumulate reward component running sums instead of buffering all dicts
+            if reward_sums is None:
+                reward_sums = {k: v for k, v in step_info.items()}
+            else:
+                reward_sums = {k: reward_sums[k] + v for k, v in step_info.items()}
+            reward_count += 1
 
             # Auto-reset: immediately replace terminated envs with fresh ones
             self.rng, k = jax.random.split(self.rng)
             state, obs = env.auto_reset(state, obs, done, k)
 
+            if profile:
+                jax.block_until_ready(obs["proprio"])
+                t_auto_reset += time.time() - t0
+
         # Bootstrap value for last step
         _, _, last_value, _ = self._sample_action(obs)
+
+        t_gae = time.time()
 
         # Stack: (T, B, ...)
         rewards = jnp.stack(buf_rewards)     # (T, B)
         dones   = jnp.stack(buf_dones)       # (T, B)
+        stacked_values = jnp.stack(buf_values)  # (T, B) — reused below
         values  = jnp.concatenate(
-            [jnp.stack(buf_values), last_value[None]], axis=0   # (T+1, B)
+            [stacked_values, last_value[None]], axis=0   # (T+1, B)
         )
 
         advantages, returns = compute_gae(rewards, values, dones)
@@ -402,23 +484,36 @@ class PPOTrainer:
         # value clipping (old_value ± CLIP_EPS) operates in normalized space.
         ret_mean = returns.mean()
         ret_std  = returns.std() + 1e-8
-        returns_norm   = (returns        - ret_mean) / ret_std
-        old_values_raw = jnp.stack(buf_values)           # (T, B) — collected values
-        old_values_norm = (old_values_raw - ret_mean) / ret_std
+        returns_norm    = (returns         - ret_mean) / ret_std
+        old_values_norm = (stacked_values  - ret_mean) / ret_std
 
         # Flatten (T*B, ...)
         def flat(x):
             return x.reshape(-1, *x.shape[2:]) if x.ndim > 2 else x.reshape(-1)
 
+        # Normalize advantages globally BEFORE the update loop so every
+        # minibatch sees mean≈0, std≈1 advantages.  This prevents the first
+        # minibatch from receiving extreme advantages that blow up the ratio.
+        adv_flat = flat(advantages)
+        adv_mean = adv_flat.mean()
+        adv_std  = adv_flat.std() + 1e-8
+        adv_norm = (adv_flat - adv_mean) / adv_std
+
+        # Stack observation buffers once — reused for batch and diagnostics
+        stacked_cnn_feat = jnp.stack(buf_cnn_feat)  # (T, B, 256)
+        stacked_proprio  = jnp.stack(buf_proprio)    # (T, B, 37)
+
         batch = RolloutBatch(
-            cnn_feat   = flat(jnp.stack(buf_cnn_feat)),  # (T*B, 256)
-            proprio    = flat(jnp.stack(buf_proprio)),
+            cnn_feat   = flat(stacked_cnn_feat),
+            proprio    = flat(stacked_proprio),
             action     = flat(jnp.stack(buf_actions)),
             log_prob   = flat(jnp.stack(buf_log_prob)),
-            advantage  = flat(advantages),
+            advantage  = adv_norm,
             ret        = flat(returns_norm),
             old_value  = flat(old_values_norm),
         )
+
+        t_gae_end = time.time()
 
         # One device→host sync HERE (after the loop), not inside the loop
         rollout_stats = {
@@ -428,12 +523,71 @@ class PPOTrainer:
             "done_rate":  float(dones.mean()),
             "ep_count":   int(dones.sum()),
         }
+
+        # ── Rollout diagnostics ────────────────────────────────────────
+        # Reuse stacked_values, stacked_proprio, stacked_cnn_feat (no redundant stacking)
+        rollout_stats["_diag"] = {
+            # Raw returns (before normalization)
+            "ret_raw_mean":      float(returns.mean()),
+            "ret_raw_std":       float(returns.std()),
+            "ret_raw_min":       float(returns.min()),
+            "ret_raw_max":       float(returns.max()),
+            # Normalized returns
+            "ret_norm_mean":     float(returns_norm.mean()),
+            "ret_norm_std":      float(returns_norm.std()),
+            "ret_norm_min":      float(returns_norm.min()),
+            "ret_norm_max":      float(returns_norm.max()),
+            # Normalization scale
+            "ret_scale_mean":    float(ret_mean),
+            "ret_scale_std":     float(ret_std),
+            # Advantages
+            "adv_mean":          float(advantages.mean()),
+            "adv_std":           float(advantages.std()),
+            "adv_min":           float(advantages.min()),
+            "adv_max":           float(advantages.max()),
+            # Value predictions (raw, before normalization)
+            "val_raw_mean":      float(stacked_values.mean()),
+            "val_raw_std":       float(stacked_values.std()),
+            "val_raw_min":       float(stacked_values.min()),
+            "val_raw_max":       float(stacked_values.max()),
+            # Explained variance: how well values predict returns
+            "explained_var":     float(1.0 - jnp.var(returns - stacked_values)
+                                       / (jnp.var(returns) + 1e-8)),
+            # Observation health (reuse pre-stacked arrays)
+            "proprio_mean":      float(stacked_proprio.mean()),
+            "proprio_std":       float(stacked_proprio.std()),
+            "proprio_nan_frac":  float(jnp.mean(~jnp.isfinite(stacked_proprio))),
+            "cnn_feat_mean":     float(stacked_cnn_feat.mean()),
+            "cnn_feat_std":      float(stacked_cnn_feat.std()),
+            "cnn_feat_nan_frac": float(jnp.mean(~jnp.isfinite(stacked_cnn_feat))),
+        }
+
+        t_diag_end = time.time()
+
+        # Aggregate reward components from running sums (no per-step stacking)
+        if reward_sums is not None and reward_count > 0:
+            reward_components = {
+                k: float(v.mean() / reward_count) for k, v in reward_sums.items()
+            }
+            rollout_stats["_diag"]["reward_components"] = reward_components
+
+        # Attach timing info when profiling
+        if profile:
+            rollout_stats["_timing"] = {
+                "inference_sec":  t_inference,
+                "env_step_sec":   t_env_step,
+                "auto_reset_sec": t_auto_reset,
+                "gae_batch_sec":  t_gae_end - t_gae,
+                "diag_sec":       t_diag_end - t_gae_end,
+            }
+
         return state, obs, batch, rollout_stats
 
     # ──────────────────────────────────────────────────────────────────
     def update(self, batch: RolloutBatch) -> Dict:
-        """Run N_EPOCHS of PPO updates on the collected batch."""
+        """Run N_EPOCHS of PPO updates with KL early stopping."""
         total_samples = batch.cnn_feat.shape[0]
+        TARGET_KL = 0.03   # stop epoch loop if approx KL exceeds this
 
         for epoch in range(N_EPOCHS):
             self.rng, k = jax.random.split(self.rng)
@@ -452,7 +606,14 @@ class PPOTrainer:
                 )
                 self.train_state, info = ppo_update(self.train_state, mb)
 
-        return info   # last minibatch's info
+            # Early stop if policy changed too much this epoch
+            approx_kl = float(info.get("approx_kl", 0.0))
+            if approx_kl > TARGET_KL:
+                info["early_stop_epoch"] = epoch + 1
+                break
+
+        info["epochs_run"] = epoch + 1
+        return info
 
     # ──────────────────────────────────────────────────────────────────
     def save(self, path: str):

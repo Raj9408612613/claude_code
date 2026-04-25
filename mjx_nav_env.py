@@ -47,10 +47,22 @@ def is_healthy(qpos: jnp.ndarray, proprio: jnp.ndarray) -> jnp.ndarray:
     obs_ok    = jnp.all(jnp.isfinite(proprio), axis=-1) # (B,)
     return height_ok & obs_ok
 
-# ── Joint limits (from config.py SPOT_ROBOT) ─────────────────────────────────
-JOINT_LOWER = jnp.array([-0.8,-0.6,-2.8]*4, dtype=jnp.float32)
-JOINT_UPPER = jnp.array([ 0.8, 2.4,-0.5]*4, dtype=jnp.float32)
-STANDING_POSE = jnp.array([0.0, 0.8, -1.6]*4, dtype=jnp.float32)
+# ── Joint limits (real Spot SDK values from MuJoCo Menagerie) ────────────────
+# Per-joint limits: fl, fr, hl, hr (each has slightly different knee limits)
+JOINT_LOWER = jnp.array([
+    -0.785398, -0.898845, -2.7929,   # fl: hx, hy, kn
+    -0.785398, -0.898845, -2.7929,   # fr
+    -0.785398, -0.898845, -2.7929,   # hl
+    -0.785398, -0.898845, -2.7929,   # hr
+], dtype=jnp.float32)
+JOINT_UPPER = jnp.array([
+     0.785398,  2.29511,  -0.254402, # fl
+     0.785398,  2.24363,  -0.255648, # fr
+     0.785398,  2.29511,  -0.247067, # hl
+     0.785398,  2.29511,  -0.248282, # hr
+], dtype=jnp.float32)
+# Real standing pose from Spot SDK (home keyframe)
+STANDING_POSE = jnp.array([0.0, 1.04, -1.8]*4, dtype=jnp.float32)
 
 # Room half-extents for random placement (10×10 m room)
 ROOM_HALF = 4.5   # keep 0.5m from walls
@@ -122,6 +134,13 @@ class SpotMJXEnv:
             partial(self._single_physics_step, self._mx)
         ))
 
+        # ── Cache MJX data template for fast reset ──────────────────
+        # Creating mujoco.MjData + mjx.put_data on CPU is expensive (~ms).
+        # auto_reset calls reset() every step (2048×/rollout), so caching
+        # this template avoids 2048 CPU-side MuJoCo constructions per rollout.
+        _mj_data = mujoco.MjData(self._mj_model)
+        self._dx_template = mjx.put_data(self._mj_model, _mj_data)
+
         # ── Obs / action space info ───────────────────────────────────
         self.obs_depth_shape = (n_envs, N_CAMS, CAM_H, CAM_W)
         self.obs_proprio_dim = 37
@@ -145,12 +164,11 @@ class SpotMJXEnv:
         rng, *sub = jax.random.split(rng, self.n_envs + 1)
         sub = jnp.stack(sub)   # (n_envs, 2)
 
-        # Build batch of initial MJX data
-        mj_data = mujoco.MjData(self._mj_model)
-        dx_single = mjx.put_data(self._mj_model, mj_data)
-        dx_batch  = jax.tree_util.tree_map(
+        # Build batch of initial MJX data from cached template (no CPU-side
+        # mujoco.MjData construction — saves ~ms per call, 2048× per rollout)
+        dx_batch = jax.tree_util.tree_map(
             lambda x: jnp.broadcast_to(x, (self.n_envs,) + x.shape),
-            dx_single,
+            self._dx_template,
         )
 
         # Randomize robot start positions and orientations
@@ -180,7 +198,7 @@ class SpotMJXEnv:
         # Set x, y, z height
         qpos = qpos.at[:, 0].set(robot_xy[:, 0])
         qpos = qpos.at[:, 1].set(robot_xy[:, 1])
-        qpos = qpos.at[:, 2].set(0.52)           # standing height
+        qpos = qpos.at[:, 2].set(0.46)           # standing height (real Spot)
         # Set yaw via quaternion: [cos(θ/2), 0, 0, sin(θ/2)]
         qpos = qpos.at[:, 3].set(jnp.cos(robot_yaw / 2))
         qpos = qpos.at[:, 6].set(jnp.sin(robot_yaw / 2))
@@ -331,6 +349,15 @@ class SpotMJXEnv:
         joint_pos  = dx.qpos[:, 7:19]         # (B, 12)
         joint_vel  = dx.qvel[:, 6:18]         # (B, 12)
 
+        # Sanitize physics state before reward computation.
+        # isfinite guards only catch NaN/Inf; clip catches huge-but-finite
+        # values from physics explosions that corrupt reward components.
+        robot_pos  = jnp.where(jnp.isfinite(robot_pos),  robot_pos,  0.0)
+        robot_pos  = jnp.clip(robot_pos,  -50.0, 50.0)
+        robot_quat = jnp.where(jnp.isfinite(robot_quat), robot_quat, jnp.array([1.0, 0.0, 0.0, 0.0]))
+        joint_vel  = jnp.where(jnp.isfinite(joint_vel),  joint_vel,  0.0)
+        joint_vel  = jnp.clip(joint_vel,  -100.0, 100.0)
+
         # Min obstacle dist (heuristic: nearest mocap body)
         obs_xy  = mocap_pos[:, :, :2]          # (B, N_OBS, 2)
         rob_xy  = robot_pos[:, :2, None].transpose(0, 2, 1)  # (B, 1, 2) → broadcast
@@ -338,7 +365,9 @@ class SpotMJXEnv:
         min_dist = jnp.min(dists, axis=-1)     # (B,)
         has_coll = min_dist < 0.35             # (B,) bool
 
-        prev_pos = prev_qpos[:, 0:3]
+        prev_pos   = prev_qpos[:, 0:3]
+        prev_pos   = jnp.where(jnp.isfinite(prev_pos), prev_pos, 0.0)
+        prev_pos   = jnp.clip(prev_pos, -50.0, 50.0)
 
         # ── Reward ────────────────────────────────────────────────────
         reward, r_info, new_dist = compute_reward(
@@ -410,18 +439,28 @@ class SpotMJXEnv:
         goal_dist  = jnp.linalg.norm(goal_diff, axis=-1, keepdims=True)  # (B, 1)
         goal_dir   = goal_diff / (goal_dist + 1e-8)
 
+        # Scale each component to roughly [-1, 1] range so the network
+        # sees inputs with std ≈ 1 instead of std ≈ 31.
+        # joint_pos:  typical range ±π   → /π
+        # joint_vel:  typical range ±20  → /20
+        # robot_quat: already in [-1,1]
+        # robot_linv: typical range ±5   → /5
+        # robot_angv: typical range ±10  → /10
+        # goal_dir:   already in [-1,1]
+        # goal_dist:  typical range 0-10 → /5
         proprio = jnp.concatenate([
-            joint_pos,    # 12
-            joint_vel,    # 12
-            robot_quat,   # 4
-            robot_linv,   # 3
-            robot_angv,   # 3
-            goal_dir,     # 2
-            goal_dist,    # 1
-        ], axis=-1)        # 37-dim
+            joint_pos / 3.14,    # 12
+            joint_vel / 20.0,    # 12
+            robot_quat,          # 4
+            robot_linv / 5.0,    # 3
+            robot_angv / 10.0,   # 3
+            goal_dir,            # 2
+            goal_dist / 5.0,     # 1
+        ], axis=-1)              # 37-dim
 
-        # Sanitize: replace any NaN/inf with 0 so the network never sees garbage
+        # Sanitize: replace NaN/inf with 0, then clip to ±10.
         proprio = jnp.where(jnp.isfinite(proprio), proprio, 0.0)
+        proprio = jnp.clip(proprio, -10.0, 10.0)
 
         return {"depth": depth, "proprio": proprio}
 

@@ -9,10 +9,29 @@ Usage (Colab Pro / L4 / A100):
 
 For quick smoke test:
     python mjx_train.py --n_envs 64 --n_steps 128 --total_updates 5 --log_interval 1
+
+GPU Memory Notes:
+    By default JAX pre-allocates 90% of GPU VRAM at startup, so nvidia-smi
+    will show ~70 GB "used" on a 80 GB GPU even if actual tensor usage is <2 GB.
+    We set XLA_PYTHON_CLIENT_PREALLOCATE=false below so that reported memory
+    reflects real usage.  Expected actual memory:
+        128 envs:  ~0.7-1.5 GB
+        512 envs:  ~2-4 GB
+        2048 envs: ~8-15 GB
+        4096 envs: ~15-30 GB
+
+    Tip: prefer more envs × fewer steps (e.g. 512×512) over fewer envs × more
+    steps (e.g. 128×2048).  Same sample count but fewer Python loop iterations,
+    which is the main speed bottleneck.
 """
 
-import argparse
 import os
+# Must be set BEFORE importing JAX — switches from pre-allocating 90% of GPU
+# VRAM to grow-on-demand, so nvidia-smi shows actual memory usage.
+#os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+#os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+
+import argparse
 import sys
 import time
 import json
@@ -23,6 +42,7 @@ import jax.numpy as jnp
 
 from mjx_nav_env import SpotMJXEnv
 from jax_ppo import PPOTrainer
+from ppo_diagnostics import print_diagnostics
 
 
 def parse_args():
@@ -56,6 +76,9 @@ def parse_args():
     # Resume
     p.add_argument("--resume",        type=str,   default=None,
                    help="Path to checkpoint to resume from")
+    # Profiling
+    p.add_argument("--profile",       type=int,   default=0, metavar="N",
+                   help="Profile first N updates with per-component timing")
     return p.parse_args()
 
 
@@ -129,6 +152,21 @@ class SimpleLogger:
             if "ratio_mean" in update_info:
                 self.tb_writer.add_scalar("debug/ratio_mean", float(update_info["ratio_mean"]), step)
                 self.tb_writer.add_scalar("debug/ratio_max",  float(update_info["ratio_max"]),  step)
+            # Diagnostic scalars
+            for diag_key in ["approx_kl", "clip_frac", "action_mean_abs",
+                             "action_std_mean", "grad_norm", "grad_nan_frac"]:
+                if diag_key in update_info:
+                    self.tb_writer.add_scalar(f"diag/{diag_key}", float(update_info[diag_key]), step)
+            # Rollout diagnostics
+            diag = rollout_stats.get("_diag", {})
+            for diag_key in ["ret_raw_mean", "ret_raw_std", "adv_mean", "adv_std",
+                             "val_raw_mean", "val_raw_std", "explained_var",
+                             "ret_scale_mean", "ret_scale_std"]:
+                if diag_key in diag:
+                    self.tb_writer.add_scalar(f"diag/{diag_key}", diag[diag_key], step)
+            # Reward components
+            for comp_name, comp_val in diag.get("reward_components", {}).items():
+                self.tb_writer.add_scalar(f"reward_comp/{comp_name}", comp_val, step)
             self.tb_writer.add_scalar("timing/rollout_sec", rollout_sec, step)
             self.tb_writer.add_scalar("timing/update_sec",  update_sec,  step)
             self.tb_writer.flush()
@@ -136,6 +174,21 @@ class SimpleLogger:
     def close(self):
         if self.tb_writer:
             self.tb_writer.close()
+
+
+def report_gpu_memory(label=""):
+    """Print actual GPU memory usage (not JAX's pre-allocated pool)."""
+    try:
+        for dev in jax.devices():
+            stats = dev.memory_stats()
+            if stats:
+                used_gb = stats.get("bytes_in_use", 0) / 1e9
+                peak_gb = stats.get("peak_bytes_in_use", 0) / 1e9
+                limit_gb = stats.get("bytes_limit", 0) / 1e9
+                print(f"  [GPU {label}] {used_gb:.2f} GB used, "
+                      f"{peak_gb:.2f} GB peak, {limit_gb:.2f} GB limit")
+    except Exception as e:
+        print(f"  [GPU {label}] Could not read memory stats: {e}")
 
 
 def main():
@@ -177,6 +230,7 @@ def main():
         seed          = args.seed,
     )
     print(f"[INIT] Environment created in {time.time()-t0:.1f}s")
+    report_gpu_memory("after env creation")
 
     print("[INIT] Creating PPO trainer...")
     trainer = PPOTrainer(
@@ -197,6 +251,7 @@ def main():
     rng = jax.random.PRNGKey(args.seed)
     rng, reset_key = jax.random.split(rng)
     state, obs = env.reset(reset_key)
+    report_gpu_memory("after reset")
     print("[INIT] Reset complete. Starting training.\n")
 
     # ── Training loop ──────────────────────────────────────────────────
@@ -206,14 +261,29 @@ def main():
 
     for update in range(1, args.total_updates + 1):
         # ── Collect rollout ────────────────────────────────────────────
+        do_profile = args.profile > 0 and update <= args.profile
         t_roll = time.time()
-        state, obs, batch, rollout_stats = trainer.collect_rollout(env, state, obs)
+        state, obs, batch, rollout_stats = trainer.collect_rollout(
+            env, state, obs, profile=do_profile,
+        )
         rollout_sec = time.time() - t_roll
 
         # ── PPO update ─────────────────────────────────────────────────
         t_upd = time.time()
         update_info = trainer.update(batch)
         update_sec = time.time() - t_upd
+
+        # ── Print profiling breakdown ─────────────────────────────────
+        if do_profile:
+            timing = rollout_stats.get("_timing", {})
+            if timing:
+                print(f"  [PROFILE update {update}] "
+                      f"inference={timing.get('inference_sec', 0):.2f}s  "
+                      f"env_step={timing.get('env_step_sec', 0):.2f}s  "
+                      f"auto_reset={timing.get('auto_reset_sec', 0):.2f}s  "
+                      f"gae_batch={timing.get('gae_batch_sec', 0):.2f}s  "
+                      f"diag={timing.get('diag_sec', 0):.2f}s")
+            report_gpu_memory(f"after update {update}")
 
         total_timesteps += args.n_envs * args.n_steps
         wall_time = time.time() - train_start
@@ -235,6 +305,14 @@ def main():
                   f"entropy={float(update_info['entropy']):.3f} | "
                   f"{fps:.0f} fps | "
                   f"roll={rollout_sec:.1f}s upd={update_sec:.1f}s")
+
+            # ── Diagnostics ────────────────────────────────────────────
+            rollout_diag = rollout_stats.get("_diag", {})
+            update_diag = {k: (float(v) if hasattr(v, 'shape') and v.ndim == 0 else
+                              (v.tolist() if hasattr(v, 'tolist') and hasattr(v, 'ndim') and v.ndim > 0 else
+                               float(v) if not isinstance(v, (list, dict)) else v))
+                          for k, v in update_info.items()}
+            print_diagnostics(update, rollout_diag, update_diag)
 
             # Track best
             if rew_mean > best_rew_mean:
