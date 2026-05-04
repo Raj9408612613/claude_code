@@ -202,6 +202,7 @@ if HAS_ISAAC:
         # The MJCF importer converts spot_scene.xml + OBJ meshes to USD.
         # After conversion, reference the USD path here.
         robot = ArticulationCfg(          # double check if the usd has been properly refferenced. ill add a commment to the main page.
+            #need momr eunderstanding, todo by 5th May. 
             prim_path="{ENV_REGEX_NS}/Robot",
             spawn=sim_utils.UsdFileCfg(
                 # Path to converted USD (user must run MJCF import first)
