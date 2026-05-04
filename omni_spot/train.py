@@ -319,7 +319,7 @@ def main():
     print(f"[INIT] Environment created in {time.time()-t0:.1f}s")
     report_gpu_memory("after env creation")
 
-    # ── Trainer ─────────────────────────────────────────────────────
+    # ── TRAINER ─────────────────────────────────────────────────────
     print("[INIT] Creating PPO trainer...")
     trainer = PPOTrainer(
         n_envs        = args.num_envs,
