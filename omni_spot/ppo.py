@@ -11,7 +11,7 @@ from typing import NamedTuple
 
 import torch
 import torch.nn as nn
-import numpy as np
+#import numpy as np
 
 from .config import (
     GAMMA, GAE_LAMBDA, CLIP_EPS, ENT_COEF, VF_COEF,
